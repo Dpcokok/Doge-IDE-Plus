@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与 web 端 CSS 变量 bg / bg2 保持一致，避免启动/切换时的白闪 -->
+    <color name="doge_bg">#FF1A1B26</color>
+    <color name="doge_bg2">#FF16161E</color>
+</resources>

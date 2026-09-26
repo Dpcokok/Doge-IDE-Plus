@@ -1,0 +1,81 @@
+plugins {
+    id 'com.android.application'
+}
+
+// APK 里的 web 资源直接来自仓库根目录，避免同一份代码维护两遍。
+// app 模块的上级是 android/，所以仓库根要再往上一层。
+def repoRoot = file('../..')
+def webAppDir = layout.buildDirectory.dir('generated/webapp')
+
+// 可选正式签名：把 keystore.properties 放在 android/ 下（格式见 android/README.md）
+def keystoreFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+def hasKeystore = keystoreFile.exists()
+if (hasKeystore) {
+    keystoreFile.withInputStream { keystoreProps.load(it) }
+}
+
+android {
+    namespace 'com.doge.ide'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.doge.ide'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        if (hasKeystore) {
+            create('release') {
+                storeFile rootProject.file(keystoreProps['storeFile'].toString())
+                storePassword keystoreProps['storePassword'].toString()
+                keyAlias keystoreProps['keyAlias'].toString()
+                keyPassword keystoreProps['keyPassword'].toString()
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // 无第三方依赖，混淆收益极小，换取构建可预测性
+            minifyEnabled false
+            signingConfig hasKeystore ? signingConfigs.getByName('release') : signingConfigs.getByName('debug')
+        }
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+android.sourceSets.main.assets.srcDir(webAppDir.get().asFile)
+
+tasks.register('syncWebapp', Sync) {
+    description = 'Copy doge-ide.html + web/ from the repo root into the APK assets'
+    group = 'build'
+    into webAppDir
+    from(repoRoot) {
+        include 'doge-ide.html'
+        rename { 'index.html' }
+    }
+    from(repoRoot) {
+        include 'web/**'
+    }
+}
+
+tasks.named('preBuild').configure {
+    dependsOn 'syncWebapp'
+}

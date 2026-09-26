@@ -1,0 +1,9 @@
+# Desktop build outputs and downloaded toolchains
+exe/.tmp/
+exe/.toolchain/
+exe/*.exe
+
+# Local/editor artifacts
+.idea/
+.vscode/
+*.log

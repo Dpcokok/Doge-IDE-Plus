@@ -1,0 +1,2098 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#16161e">
+<title>Doge IDE - 轻量在线编程工具</title>
+<link rel="stylesheet" href="web/codemirror/codemirror.min.css">
+<link rel="stylesheet" href="web/codemirror/addon/hint/show-hint.min.css">
+<link rel="stylesheet" href="web/fonts/geist.css">
+<style>
+@font-face {
+  font-family: 'Maple Mono';
+  src: url('web/fonts/maple-mono-var.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#1a1b26;--bg2:#16161e;--bg3:#24283b;--bg4:#292e42;
+  --fg:#c0caf5;--fg2:#a9b1d6;--fg3:#565f89;
+  --accent:#7aa2f7;--accent2:#2ac3de;--green:#9ece6a;--red:#f7768e;
+  --orange:#ff9e64;--purple:#bb9af7;--cyan:#7dcfff;
+  --border:#3b4261;--shadow:rgba(0,0,0,.4);
+  --radius:8px;
+  --font-sans:"Geist Sans", "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono:"Maple Mono", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --code-size:14px;
+}
+body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:none;touch-action:manipulation;-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}
+
+/* Header */
+.header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0}
+.logo{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700}
+.logo svg{width:28px;height:28px}
+.header-right{display:flex;align-items:center;gap:12px}
+.run-btn{display:flex;align-items:center;gap:6px;padding:6px 18px;background:var(--green);color:#1a1b26;border:none;border-radius:var(--radius);font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
+.run-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.run-btn:active{transform:translateY(0)}
+.run-btn.running{background:var(--orange);pointer-events:none}
+.run-btn kbd{font-size:11px;opacity:.7;font-family:inherit}
+.debug-btn{display:flex;align-items:center;gap:6px;padding:6px 14px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius);font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
+.debug-btn:hover{border-color:var(--purple);color:var(--purple);transform:translateY(-1px)}
+.debug-btn.running{background:var(--orange);color:#1a1b26;border-color:transparent;pointer-events:none}
+.debug-btn kbd{font-size:11px;opacity:.7;font-family:inherit}
+.hotkey-hint{font-size:12px;color:var(--fg3)}
+
+/* Main layout */
+.main{display:flex;flex:1;overflow:hidden}
+
+/* Editor panel */
+.editor-panel{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border)}
+
+/* Tabs */
+.tabs{display:flex;align-items:center;background:var(--bg2);border-bottom:1px solid var(--border);padding:0 8px;flex-shrink:0;gap:2px}
+.tab{padding:8px 16px;font-size:13px;color:var(--fg3);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;user-select:none;border-radius:6px 6px 0 0}
+.tab:hover{color:var(--fg2);background:var(--bg3)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);background:var(--bg3)}
+.tab .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.tab-group-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+
+/* Packs */
+.packs-toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg3);cursor:pointer;user-select:none;padding:4px 8px;border-radius:4px;transition:background .15s}
+.packs-toggle:hover{background:var(--bg3);color:var(--fg2)}
+.packs-toggle input{accent-color:var(--accent)}
+
+/* Editor */
+.editor-wrap{flex:1;position:relative;overflow:hidden}
+.CodeMirror{height:100%!important;font-family:var(--font-mono);font-size:var(--code-size);line-height:1.6}
+.CodeMirror-gutters{background:transparent!important;border-right:none!important}
+
+/* Uapi.cn dark theme - faithfully ported from uapis.cn/tools/run-* */
+.cm-s-doge.CodeMirror{background:#181818;color:#d6d6dd}
+.cm-s-doge .CodeMirror-gutters{background:transparent;color:#f0f0f05c;border:none}
+.cm-s-doge .CodeMirror-guttermarker-subtle{color:#f0f0f05c}
+.cm-s-doge .CodeMirror-guttermarker{color:#f0f0f0}
+.cm-s-doge .CodeMirror-linenumber{color:#f0f0f05c;padding:0 16px 0 8px;font-size:calc(var(--code-size, 14px) - 1.5px)}
+.cm-s-doge .CodeMirror-cursor{border-left:1.5px solid #f0f0f0}
+.cm-s-doge div.CodeMirror-selected{background:#40404099}
+.cm-s-doge .CodeMirror-line::selection,.cm-s-doge .CodeMirror-line>span::selection,.cm-s-doge .CodeMirror-line>span>span::selection{background:#40404099}
+.cm-s-doge .CodeMirror-activeline-background{background:#262626}
+.cm-s-doge .CodeMirror-activeline-gutter{background:#f0f0f016;color:#f0f0f0}
+.cm-s-doge.CodeMirror-focused div.CodeMirror-cursor{visibility:visible}
+.cm-s-doge .CodeMirror-matchingbracket{background:#f0f0f01e;outline:1px solid transparent;color:#d6d6dd;border-radius:2px}
+.cm-s-doge .CodeMirror-nonmatchingbracket{color:#f14c4c;background:transparent}
+.cm-s-doge .CodeMirror-searching{background:#88c0d044;border-radius:2px}
+.cm-s-doge .CodeMirror-searching.cm-searching-selected{background:#88c0d066}
+.cm-s-doge .CodeMirror-foldmarker{background:#404040cc;color:#f0f0f0;border:none;border-radius:4px;padding:0 6px;margin:0 4px}
+.cm-s-doge .CodeMirror-foldgutter-open,.cm-s-doge .CodeMirror-foldgutter-folded{color:#f0f0f05c}
+/* core tokens */
+.cm-s-doge .cm-keyword{color:#82d2ce}
+.cm-s-doge .cm-operator{color:#82d2ce}
+.cm-s-doge .cm-atom{color:#82d2ce}
+.cm-s-doge .cm-qualifier{color:#82d2ce}
+.cm-s-doge .cm-variable-2{color:#87c3ff}
+.cm-s-doge .cm-variable-3{color:#82d2ce}
+.cm-s-doge .cm-variable{color:#d6d6dd}
+.cm-s-doge .cm-def{color:#f0f0f0}
+.cm-s-doge .cm-property{color:#aaa0fa}
+.cm-s-doge .cm-builtin{color:#f8c762}
+.cm-s-doge .cm-number{color:#ebc88d}
+.cm-s-doge .cm-string{color:#e394dc}
+.cm-s-doge .cm-string-2{color:#e394dc}
+.cm-s-doge .cm-comment{color:#f0f0f099;font-style:italic}
+.cm-s-doge .cm-meta{color:#a8cc7c}
+.cm-s-doge .cm-error{color:#f14c4c}
+.cm-s-doge .cm-doge-undefined{text-decoration:underline wavy #f14c4c;text-decoration-skip-ink:none}
+.cm-s-doge .cm-punctuation{color:#d6d6dd}
+.cm-s-doge .cm-bracket{color:#d6d6dd}
+.cm-s-doge .cm-tag{color:#87c3ff}
+.cm-s-doge .cm-attribute{color:#aaa0fa}
+.cm-s-doge .cm-attribute.cm-property{color:#aaa0fa}
+/* headings / markdown-ish */
+.cm-s-doge .cm-header{color:#87c3ff;font-weight:600}
+.cm-s-doge .cm-strong{color:#f0f0f0;font-weight:600}
+.cm-s-doge .cm-em{color:#f0f0f0;font-style:italic}
+.cm-s-doge .cm-link{color:#aaa0fa;text-decoration:underline}
+.cm-s-doge .cm-url{color:#e394dc}
+.cm-s-doge .cm-negative{color:#f14c4c}
+.cm-s-doge .cm-positive{color:#a8cc7c}
+.cm-s-doge .cm-hr{color:#d6d6dd}
+/* autocomplete/selection popups (CM5 appends these to <body>, so NOT scoped under .cm-s-doge) */
+.CodeMirror-hints,.CodeMirror-Tern-tooltip{background:#181818;border:1px solid #f0f0f01e;border-radius:6px;color:#d6d6dd;font-family:var(--font-mono);font-size:var(--code-size);line-height:1.6;box-shadow:0 8px 24px rgba(0,0,0,.4);padding:4px;max-height:220px;overflow-y:auto;z-index:1000}
+.CodeMirror-hints::-webkit-scrollbar{width:8px}
+.CodeMirror-hints::-webkit-scrollbar-thumb{background:#f0f0f01e;border-radius:4px}
+.CodeMirror-hints::-webkit-scrollbar-track{background:transparent}
+.CodeMirror-hints .CodeMirror-hint,.CodeMirror-Tern-tooltip{color:#d6d6dd;padding:3px 8px;border-radius:4px;font-family:var(--font-mono)}
+.CodeMirror-hints .CodeMirror-hint:hover{background:#f0f0f00d}
+.CodeMirror-hints li.CodeMirror-hint-active,.CodeMirror-hints .CodeMirror-hint-active{background:#f0f0f01e;color:#f0f0f0}
+
+/* Stdin */
+.stdin-section{border-top:1px solid var(--border);flex-shrink:0}
+.stdin-header{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--bg2);cursor:pointer;user-select:none;font-size:12px;color:var(--fg3)}
+.stdin-header:hover{color:var(--fg2)}
+.stdin-header svg{transition:transform .2s}
+.stdin-header.collapsed svg{transform:rotate(-90deg)}
+.stdin-input{width:100%;height:80px;background:var(--bg);color:var(--fg);border:none;padding:8px 12px;font-family:var(--font-mono);font-size:var(--code-size);line-height:1.6;resize:none;outline:none;display:block}
+.stdin-input.hidden{display:none}
+
+/* Output panel */
+.output-panel{width:40%;min-width:280px;display:flex;flex-direction:column;background:var(--bg2);flex-shrink:0}
+.output-header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
+.output-title{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+.output-meta{font-size:11px;color:var(--fg3);display:flex;gap:12px}
+.output-meta span{display:flex;align-items:center;gap:4px}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--fg3)}
+.status-dot.success{background:var(--green)}
+.status-dot.error{background:var(--red)}
+.status-dot.running{background:var(--orange);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+.output-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);flex-shrink:0}
+.output-tab{padding:6px 14px;font-size:12px;color:var(--fg3);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+.output-tab:hover{color:var(--fg2)}
+.output-tab.active{color:var(--accent2);border-bottom-color:var(--accent2)}
+.output-tab .count{font-size:10px;background:var(--bg4);padding:1px 5px;border-radius:8px;margin-left:4px}
+
+.output-content{flex:1;overflow:auto;padding:12px;font-family:var(--font-mono);font-size:var(--code-size);line-height:1.6;white-space:pre-wrap;word-break:break-all}
+.output-content.stdout{color:var(--fg)}
+.output-content.stderr{color:var(--red)}
+.output-content.info{color:var(--fg3)}
+.output-content.debug{white-space:normal;font-family:var(--font-sans);font-size:13px}
+.output-placeholder{color:var(--fg3);font-style:italic}
+
+/* Breakpoints */
+.CodeMirror-gutter.doge-breakpoints{width:14px;cursor:pointer}
+.doge-bp-dot{position:relative;height:100%;min-height:1.6em}
+.doge-bp-dot::after{content:'';position:absolute;left:3px;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 4px rgba(247,118,142,.6)}
+.cm-s-doge .doge-debug-line{background:rgba(122,162,247,.16)!important}
+.cm-s-doge .doge-debug-line + .CodeMirror-gutter-elt{color:var(--accent)!important}
+
+/* Debug panel */
+.debug-bar{display:flex;align-items:center;gap:6px;padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:8px;flex-wrap:wrap}
+.debug-bar button{background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit;transition:all .15s}
+.debug-bar button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.debug-bar button:disabled{opacity:.35;cursor:default}
+.debug-pos{font-size:12px;color:var(--fg3);min-width:72px;text-align:center}
+.debug-list{max-height:34vh;overflow:auto;border:1px solid var(--border);border-radius:6px;margin-bottom:10px;background:var(--bg)}
+.debug-ev{padding:3px 10px;font-size:12px;cursor:pointer;display:flex;gap:10px;border-bottom:1px solid rgba(255,255,255,.03)}
+.debug-ev:hover{background:var(--bg3)}
+.debug-ev.active{background:var(--bg4);color:var(--accent)}
+.debug-ev.bp{color:var(--orange)}
+.debug-ev .ln{color:var(--fg3);min-width:52px}
+.debug-ev.active .ln{color:var(--accent)}
+.debug-detail h4{margin:8px 0 4px;font-size:12px;color:var(--accent2);font-weight:600}
+.debug-stack{font-family:var(--font-mono);font-size:12px;line-height:1.7;color:var(--fg2)}
+.debug-stack .cur{color:var(--accent)}
+.debug-locals{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px}
+.debug-locals td{padding:2px 8px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top;word-break:break-all}
+.debug-locals td.k{color:var(--accent);white-space:nowrap;width:1%}
+.debug-hint{color:var(--fg3);font-size:12px;font-style:italic;padding:4px 0}
+
+/* Resize handle */
+.resize-handle{width:4px;cursor:col-resize;background:transparent;transition:background .15s;flex-shrink:0}
+.resize-handle:hover,.resize-handle.active{background:var(--accent)}
+
+/* Footer */
+.footer{display:flex;align-items:center;justify-content:space-between;padding:4px 16px;background:var(--bg2);border-top:1px solid var(--border);font-size:11px;color:var(--fg3);flex-shrink:0}
+.footer a{color:var(--accent);text-decoration:none}
+.footer a:hover{text-decoration:underline}
+
+/* Toast */
+.toast{position:fixed;top:20px;right:20px;padding:10px 18px;border-radius:var(--radius);font-size:13px;z-index:9999;transform:translateX(120%);transition:transform .3s;max-width:360px}
+.toast.show{transform:translateX(0)}
+.toast.info{background:var(--bg4);color:var(--fg);border:1px solid var(--border)}
+.toast.success{background:#1a3a2a;color:var(--green);border:1px solid #2d5a3d}
+.toast.error{background:#3a1a1a;color:var(--red);border:1px solid #5a2d2d}
+
+/* Settings */
+.settings-btn{background:none;border:1px solid var(--border);color:var(--fg3);width:32px;height:32px;border-radius:var(--radius);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.settings-btn:hover{background:var(--bg3);color:var(--fg);border-color:var(--accent)}
+.settings-panel{position:absolute;top:48px;right:16px;background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:20px;width:340px;z-index:100;box-shadow:0 8px 32px var(--shadow);display:none}
+.settings-panel.show{display:block}
+.settings-panel h3{font-size:14px;margin-bottom:16px;color:var(--accent)}
+.settings-row{margin-bottom:14px}
+.settings-row label{display:block;font-size:12px;color:var(--fg3);margin-bottom:4px}
+.settings-row input{width:100%;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;font-size:13px;outline:none}
+.settings-row input:focus{border-color:var(--accent)}
+.settings-row .hint{font-size:11px;color:var(--fg3);margin-top:3px}
+.settings-actions{display:flex;gap:8px;margin-top:16px}
+.settings-actions button{flex:1;padding:8px;border:none;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600}
+.settings-save{background:var(--accent);color:#1a1b26}
+.settings-cancel{background:var(--bg4);color:var(--fg2)}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--border)}
+
+/* Loading spinner */
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--fg3);border-top-color:var(--green);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Keyboard shortcut modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;display:none;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:400px;width:90%}
+.modal h3{margin-bottom:16px;color:var(--accent)}
+.modal .shortcut-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}
+.modal .shortcut-row:last-child{border:none}
+.modal kbd{background:var(--bg4);padding:2px 8px;border-radius:4px;font-size:12px;border:1px solid var(--border)}
+.modal .close-btn{margin-top:16px;width:100%;padding:8px;background:var(--accent);color:#1a1b26;border:none;border-radius:var(--radius);cursor:pointer;font-weight:600}
+
+/* ============ Tablet / touch adaptation ============ */
+html{-webkit-text-size-adjust:100%}
+.CodeMirror-scroll{-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.CodeMirror-hints{max-height:min(40vh,320px)}
+button,.tab,.output-tab,.stdin-header,.packs-toggle,.resize-handle{-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+.settings-btn,.close-btn{touch-action:manipulation}
+
+/* 软键盘弹出时（visualViewport 收缩）让出底部空间 */
+body.kb-open .footer{display:none}
+body.kb-open .stdin-header{display:none}
+body.kb-open .stdin-section{border-top:none}
+
+/* 触摸设备：点击区域 >= 44px，取消 hover 位移，隐藏纯键位提示 */
+@media (pointer:coarse){
+  :root{--tap:44px}
+  .run-btn,.debug-btn{min-height:var(--tap);padding:0 22px;font-size:15px}
+  .settings-btn{width:var(--tap);height:var(--tap);font-size:18px}
+  .tab{padding:12px 18px;font-size:14px}
+  .output-tab{padding:12px 16px;font-size:13px}
+  .output-tab .count{font-size:11px}
+  .stdin-header{padding:12px;font-size:13px}
+  .stdin-input{height:96px}
+  .packs-toggle{padding:10px;font-size:13px}
+  .debug-bar button{padding:10px 14px;font-size:13px}
+  .debug-ev{padding:9px 10px;font-size:13px}
+  .hotkey-hint,.run-btn kbd,.debug-btn kbd{display:none}
+  .run-btn:hover{filter:none;transform:none}
+  .debug-btn:hover,.tab:hover,.output-tab:hover,.debug-bar button:hover{transform:none;border-color:var(--border);color:inherit;background:var(--bg3)}
+  .settings-btn:hover{background:none;border-color:var(--border);color:var(--fg3)}
+  .packs-toggle:hover{background:none;color:var(--fg3)}
+  .resize-handle{width:16px;margin-left:-6px;margin-right:-6px;touch-action:none}
+  .settings-panel{top:56px;right:24px;width:min(400px,46vw);padding:24px}
+  .settings-row input{padding:12px 12px;font-size:15px}
+  .settings-actions button{padding:14px;font-size:15px}
+  .modal .close-btn{padding:14px;font-size:15px}
+  .footer{padding:6px 16px}
+  .toast{max-width:min(420px,60vw)}
+}
+
+/* 窄窗口（分屏 / 竖屏）：编辑器与输出上下堆叠 */
+@media (max-width:900px){
+  .main{flex-direction:column}
+  .editor-panel{border-right:none;border-bottom:1px solid var(--border)}
+  .output-panel{width:auto!important;min-width:0;height:42%;flex-shrink:0}
+  .resize-handle{display:none}
+}
+@media (max-height:560px){
+  .stdin-input{height:56px}
+  .footer{display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="logo">
+    <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" fill="#7aa2f7"/><text x="16" y="21" text-anchor="middle" fill="#1a1b26" font-size="16" font-weight="bold" font-family="sans-serif">D</text></svg>
+    <span>Doge IDE</span>
+  </div>
+  <div class="header-right">
+    <button class="settings-btn" onclick="toggleSettings()" title="Settings">⚙</button>
+    <span class="hotkey-hint">Ctrl+Enter 运行</span>
+    <button class="run-btn" id="runBtn" onclick="runCode()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      Run
+      <kbd>Ctrl+↵</kbd>
+    </button>
+    <button class="debug-btn" id="debugBtn" onclick="debugCode()" title="断点调试：先在行号左侧点击设置断点，再点 Debug">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8h-2.81a5.99 5.99 0 0 0-1.82-2.29l1.32-1.32-1.41-1.41-1.83 1.83a6.03 6.03 0 0 0-2.45-.52c-.87 0-1.7.19-2.45.52L6.72 2.98 5.31 4.39 6.63 5.71A5.99 5.99 0 0 0 4.81 8H2v2h2.09a6.5 6.5 0 0 0 0 4H2v2h2.81a6 6 0 0 0 11.38 0H19v-2h-.09a6.5 6.5 0 0 0 0-4H19V8zM12 19a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg>
+      Debug
+    </button>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <!-- Editor -->
+  <div class="editor-panel" id="editorPanel">
+    <div class="tabs">
+      <div id="langTabs" style="display:flex;gap:2px"></div>
+      <label class="packs-toggle" title="加载常用第三方库" style="margin-left:auto">
+        <input type="checkbox" id="packsCheck">
+        📦 常用库 (packs)
+      </label>
+    </div>
+    <div class="editor-wrap">
+      <textarea id="codeEditor"></textarea>
+    </div>
+    <div class="stdin-section">
+      <div class="stdin-header" id="stdinHeader" onclick="toggleStdin()">
+        <span>📥 Standard Input (stdin)</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+      </div>
+      <textarea class="stdin-input" id="stdinInput" placeholder="在这里输入标准输入内容..."></textarea>
+    </div>
+  </div>
+
+  <!-- Resize -->
+  <div class="resize-handle" id="resizeHandle"></div>
+
+  <!-- Output -->
+  <div class="output-panel" id="outputPanel">
+    <div class="output-header">
+      <div class="output-title">
+        <span class="status-dot" id="statusDot"></span>
+        Output
+      </div>
+      <div class="output-meta" id="outputMeta"></div>
+    </div>
+    <div class="output-tabs">
+      <div class="output-tab active" data-tab="stdout" onclick="switchOutputTab('stdout')">stdout</div>
+      <div class="output-tab" data-tab="stderr" onclick="switchOutputTab('stderr')">stderr<span class="count" id="stderrCount" style="display:none">0</span></div>
+      <div class="output-tab" data-tab="info" onclick="switchOutputTab('info')">info</div>
+      <div class="output-tab" data-tab="debug" onclick="switchOutputTab('debug')">debug<span class="count" id="debugCount" style="display:none">0</span></div>
+    </div>
+    <div class="output-content stdout" id="outputContent">
+      <span class="output-placeholder">点击 Run 或按 Ctrl+Enter 运行代码...</span>
+    </div>
+  </div>
+</div>
+
+<!-- Footer -->
+<div class="footer">
+  <span>Powered by <a href="https://uapis.cn" target="_blank">UApiPro</a> · 云端沙盒执行</span>
+  <span id="footerLang">Python 3</span>
+</div>
+
+<!-- Settings Panel -->
+<div class="settings-panel" id="settingsPanel">
+  <h3>⚙ Settings</h3>
+  <div class="settings-row">
+    <label>API Key (optional)</label>
+    <input type="password" id="apiKeyInput" placeholder="Enter your UApiPro API key...">
+    <div class="hint">Leave empty for visitor credits (limited). Get key at <a href="https://uapis.cn/console" target="_blank" style="color:var(--accent)">uapis.cn/console</a></div>
+  </div>
+  <div class="settings-row">
+    <label>API Endpoint</label>
+    <input type="text" id="apiEndpoint" value="https://uapis.cn/api/v1/execution/run">
+    <div class="hint">Default: https://uapis.cn/api/v1/execution/run</div>
+  </div>
+  <div class="settings-row">
+    <label>Timeout (ms)</label>
+    <input type="number" id="timeoutInput" value="30000" min="1000" max="30000" step="1000">
+    <div class="hint">Max 30000ms (30 seconds)</div>
+  </div>
+  <div class="settings-row">
+    <label>Editor font size (px)</label>
+    <input type="number" id="codeSizeInput" value="14" min="11" max="24" step="1">
+    <div class="hint" id="codeSizeHint">影响编辑器、stdin 与输出区</div>
+  </div>
+  <div class="settings-actions">
+    <button class="settings-cancel" onclick="toggleSettings()">Cancel</button>
+    <button class="settings-save" onclick="saveSettings()">Save</button>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- Shortcut Modal -->
+<div class="modal-overlay" id="shortcutModal">
+  <div class="modal">
+    <h3>⌨️ Keyboard Shortcuts</h3>
+    <div class="shortcut-row"><span>Run code</span><kbd>Ctrl + Enter</kbd></div>
+    <div class="shortcut-row"><span>Debug (breakpoints)</span><kbd>Ctrl + Shift + Enter</kbd></div>
+    <div class="shortcut-row"><span>Save (local)</span><kbd>Ctrl + S</kbd></div>
+    <div class="shortcut-row"><span>New file</span><kbd>Ctrl + N</kbd></div>
+    <div class="shortcut-row"><span>Switch language</span><kbd>Ctrl + 1~6</kbd></div>
+    <div class="shortcut-row"><span>Toggle stdin</span><kbd>Ctrl + I</kbd></div>
+    <div class="shortcut-row"><span>Clear output</span><kbd>Ctrl + L</kbd></div>
+    <div class="shortcut-row"><span>Toggle theme</span><kbd>Ctrl + D</kbd></div>
+    <button class="close-btn" onclick="closeModal()">Got it</button>
+  </div>
+</div>
+
+<script src="web/codemirror/codemirror.min.js"></script>
+<script src="web/codemirror/addon/hint/show-hint.min.js"></script>
+<script src="web/codemirror/mode/python/python.min.js"></script>
+<script src="web/codemirror/mode/javascript/javascript.min.js"></script>
+<script src="web/codemirror/mode/clike/clike.min.js"></script>
+<script src="web/codemirror/mode/go/go.min.js"></script>
+<script src="web/codemirror/mode/xml/xml.min.js"></script>
+<script src="web/codemirror/mode/jsx/jsx.min.js"></script>
+<script src="web/codemirror/addon/edit/closebrackets.min.js"></script>
+<script src="web/codemirror/addon/edit/matchbrackets.min.js"></script>
+<script src="web/codemirror/addon/selection/active-line.min.js"></script>
+<script>
+const LANGUAGES = [
+  {
+    id:'python', name:'Python', mode:'python', version:'Python 3',
+    color:'#3572A5', apiLang:'python',
+    packs:['python-libs'],
+    sample:`# 🐍 Python - Doge IDE
+import sys
+
+def main():
+    name = input("What's your name? ")
+    print(f"Hello, {name}! Welcome to Doge IDE!")
+    print(f"Python version: {sys.version}")
+
+if __name__ == "__main__":
+    main()
+`
+  },
+  {
+    id:'javascript', name:'JavaScript', mode:'javascript', version:'Node.js',
+    color:'#f1e05a', apiLang:'javascript',
+    packs:['node-libs'],
+    sample:`// ⚡ JavaScript - Doge IDE
+const readline = require('readline');
+const rl = readline.createInterface({ input: process.stdin });
+
+rl.question("What's your name? ", (name) => {
+    console.log(\`Hello, \${name}! Welcome to Doge IDE!\`);
+    console.log(\`Node version: \${process.version}\`);
+    rl.close();
+});
+`
+  },
+  {
+    id:'typescript', name:'TypeScript', mode:{name:'javascript', typescript:true}, version:'TypeScript',
+    color:'#3178c6', apiLang:'typescript',
+    packs:['node-libs'],
+    sample:`// 🟦 TypeScript - Doge IDE
+interface Greeting {
+  name: string;
+  message: string;
+}
+
+const greet = (name: string): Greeting => ({
+  name,
+  message: \`Hello, \${name}! Welcome to Doge IDE!\`
+});
+
+const result: Greeting = greet("World");
+console.log(result.message);
+console.log(\`TypeScript: strong types, zero runtime cost.\`);
+`
+  },
+  {
+    id:'go', name:'Go', mode:'go', version:'Go',
+    color:'#00ADD8', apiLang:'go',
+    packs:['go-libs'],
+    sample:`// 🐹 Go - Doge IDE
+package main
+
+import (
+\t"fmt"
+\t"runtime"
+)
+
+func main() {
+\tfmt.Print("What's your name? ")
+\tvar name string
+\tfmt.Scanln(&name)
+\tfmt.Printf("Hello, %s! Welcome to Doge IDE!\\n", name)
+\tfmt.Printf("Go version: %s\\n", runtime.Version())
+}
+`
+  },
+  {
+    id:'c', name:'C', mode:'text/x-csrc', version:'C17',
+    color:'#555555', apiLang:'c',
+    packs:['c-libs'],
+    sample:`// 🔧 C - Doge IDE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main() {
+    char name[100];
+    printf("What's your name? ");
+    fgets(name, sizeof(name), stdin);
+    // Remove trailing newline
+    name[strcspn(name, "\\n")] = 0;
+    printf("Hello, %s! Welcome to Doge IDE!\\n", name);
+    return 0;
+}
+`
+  },
+  {
+    id:'cpp', name:'C++', mode:'text/x-c++src', version:'C++20',
+    color:'#f34b7d', apiLang:'cpp',
+    packs:['cpp-libs'],
+    sample:`// ⚡ C++ - Doge IDE
+#include <iostream>
+#include <string>
+
+int main() {
+    std::string name;
+    std::cout << "What's your name? ";
+    std::getline(std::cin, name);
+    std::cout << "Hello, " << name << "! Welcome to Doge IDE!" << std::endl;
+    std::cout << "C++ is powerful. Use it wisely." << std::endl;
+    return 0;
+}
+`
+  }
+];
+
+let currentLang = 'python';
+let editor;
+let isRunning = false;
+let outputData = { stdout:'', stderr:'', info:'' };
+let currentOutputTab = 'stdout';
+let breakpoints = {};
+let debugState = { events: [], index: -1, lang: null };
+let debugLineHandle = null;
+let bpSaveTimer = null;
+const BP_GUTTER = 'doge-breakpoints';
+const TRACE_PREFIX = '__DOGE_TRACE__';
+const TRACE_SUFFIX = '__DOGE_END__';
+const BP_PREFIX = '__DOGE_BP__';
+const MAX_TRACE_EVENTS = 5000;
+
+// ── Autocomplete word database (keywords + builtins + common libs) ──
+const COMPLETE_WORDS = {
+  python: [
+    'and','as','assert','async','await','break','class','continue','def','del','elif','else',
+    'except','False','finally','for','from','global','if','import','in','is','lambda','None',
+    'nonlocal','not','or','pass','raise','return','True','try','while','with','yield',
+    'abs','all','any','bin','bool','bytearray','bytes','callable','chr','classmethod','compile',
+    'complex','delattr','dict','dir','divmod','enumerate','eval','exec','filter','float','format',
+    'frozenset','getattr','globals','hasattr','hash','help','hex','id','input','int','isinstance',
+    'issubclass','iter','len','list','locals','map','max','memoryview','min','next','object','oct',
+    'open','ord','pow','print','property','range','repr','reversed','round','set','setattr','slice',
+    'sorted','staticmethod','str','sum','super','tuple','type','vars','zip',
+    'sys','os','math','re','json','random','datetime','time','collections','functools','itertools',
+    'pathlib','subprocess','threading','typing','requests','numpy','pandas','httpx','PIL','PyYAML'
+  ],
+  javascript: [
+    'break','case','catch','class','const','continue','debugger','default','delete','do','else',
+    'export','extends','finally','for','function','if','import','in','instanceof','let','new',
+    'return','super','switch','this','throw','try','typeof','var','void','while','with','yield',
+    'await','async','static','get','set','true','false','null','undefined',
+    'console','Math','JSON','Object','Array','String','Number','Boolean','Promise','Symbol','Map',
+    'Set','WeakMap','WeakSet','Date','RegExp','Error','TypeError','parseInt','parseFloat','isNaN',
+    'isFinite','encodeURI','encodeURIComponent','decodeURI','decodeURIComponent','eval','setTimeout',
+    'clearTimeout','setInterval','clearInterval','process','require','module','exports',
+    'fs','path','os','http','https','crypto','events','stream','util','url','zlib','child_process',
+    'readline','Buffer','assert','querystring','axios','lodash','dayjs'
+  ],
+  typescript: [
+    'break','case','catch','class','const','continue','debugger','default','delete','do','else',
+    'export','extends','finally','for','function','if','import','in','instanceof','let','new',
+    'return','super','switch','this','throw','try','typeof','var','void','while','with','yield',
+    'await','async','static','get','set','true','false','null','undefined','any','unknown','never',
+    'interface','type','enum','namespace','declare','readonly','abstract','implements','private',
+    'protected','public','satisfies','string','number','boolean','object',
+    'console','Math','JSON','Object','Array','String','Number','Boolean','Promise','Symbol','Map',
+    'Set','WeakMap','WeakSet','Date','RegExp','Error','parseInt','parseFloat','isNaN','setTimeout',
+    'clearTimeout','setInterval','clearInterval','process','require','module','exports','fs','path'
+  ],
+  go: [
+    'break','case','chan','const','continue','default','defer','else','fallthrough','for','func',
+    'go','goto','if','import','interface','map','package','range','return','select','struct','switch',
+    'type','var','true','false','nil','iota',
+    'len','cap','make','new','append','copy','println','print','printf','panic','recover','close','delete',
+    'fmt','os','io','strconv','strings','bytes','errors','math','sort','time','sync','reflect',
+    'net','http','json','regexp','bufio','path','log','context','runtime','flag','encoding','database','sql'
+  ],
+  c: [
+    'auto','break','case','char','const','continue','default','do','double','else','enum','extern',
+    'float','for','goto','if','inline','int','long','register','restrict','return','short','signed',
+    'sizeof','static','struct','switch','typedef','union','unsigned','void','volatile','while','bool','true','false',
+    'printf','scanf','fprintf','fscanf','sprintf','snprintf','puts','gets','getchar','putchar',
+    'malloc','calloc','realloc','free','strlen','strcpy','strncpy','strcat','strcmp','strncmp',
+    'strtok','memcpy','memset','memmove','fopen','fclose','fread','fwrite','fgets','fputs','exit',
+    'abort','atoi','atof','rand','srand','qsort','bsearch','abs','pow','sqrt','clock','time',
+    'strcspn','strspn','strstr','strchr','strrchr','strtol','strtoul','strtod','memcmp','memchr',
+    'floor','ceil','fabs','fmod','log','log10','exp','sin','cos','tan','toupper','tolower',
+    'isalpha','isdigit','isalnum','isspace','isupper','islower','fgetc','fputc','ungetc','fflush',
+    'feof','ferror','fseek','ftell','rewind','sscanf','getenv','system','localtime','strftime','atexit',
+    'open','close','read','write','perror','errno','assert',
+    'stdio.h','stdlib.h','string.h','math.h','stdint.h','stdbool.h','limits.h','float.h','time.h',
+    'stdarg.h','ctype.h','assert.h'
+  ],
+  cpp: [
+    'alignas','alignof','auto','bool','break','case','catch','char','char16_t','char32_t','class',
+    'const','constexpr','const_cast','continue','decltype','default','delete','do','double','dynamic_cast',
+    'else','enum','explicit','export','extern','false','float','for','friend','goto','if','inline','int',
+    'long','mutable','namespace','new','noexcept','nullptr','operator','private','protected','public',
+    'register','reinterpret_cast','return','short','signed','sizeof','static','static_assert','static_cast',
+    'struct','switch','template','this','throw','true','try','typedef','typeid','typename','union',
+    'unsigned','using','virtual','void','volatile','wchar_t','while',
+    'std','cout','cin','cerr','clog','endl','vector','string','map','set','list','deque','array',
+    'unordered_map','unordered_set','stack','queue','priority_queue','pair','tuple','optional','variant',
+    'shared_ptr','unique_ptr','weak_ptr','make_shared','make_unique','sort','reverse','find','begin',
+    'end','size','empty','push_back','pop_back','emplace_back','insert','erase','clear','max','min',
+    'abs','sqrt','pow','sin','cos','tan','atoi','atol','stoi','stod','to_string','getline',
+    'iostream','vector','string','algorithm','map','unordered_map','memory','cmath','cstdlib','cstring',
+    'cstdio','random','chrono','thread','regex','fstream','sstream','numeric','functional','iterator',
+    'utility','limits'
+  ]
+};
+
+// Common members for popular library modules (dot/:: completion)
+const MODULE_MEMBERS = {
+  python: {
+    os:['name','environ','getcwd','chdir','listdir','mkdir','makedirs','remove','rmdir','rename','system','path','pathsep','sep','walk'],
+    path:['join','exists','isfile','isdir','abspath','basename','dirname','splitext','expanduser','glob','read_text','write_text'],
+    sys:['argv','platform','version','path','stdout','stdin','stderr','exit','getdefaultencoding','maxsize'],
+    re:['compile','search','match','fullmatch','findall','sub','split','finditer','I','M','S'],
+    json:['load','loads','dump','dumps','JSONDecodeError'],
+    math:['sqrt','pow','ceil','floor','pi','e','fabs','log','log10','sin','cos','tan','gcd','inf','nan','isnan','isinf'],
+    random:['random','randint','uniform','choice','choices','shuffle','sample','seed','gauss','randrange'],
+    datetime:['datetime','date','time','timedelta','timezone','now','utcnow','today','strftime','strptime','combine'],
+    time:['sleep','time','perf_counter','monotonic','localtime','gmtime','strftime','ctime'],
+    io:['open','StringIO','BytesIO'],
+    collections:['deque','Counter','defaultdict','OrderedDict','namedtuple'],
+    functools:['reduce','lru_cache','wraps','partial','cmp_to_key'],
+    itertools:['chain','product','permutations','combinations','groupby','count','cycle','repeat','zip_longest'],
+    subprocess:['run','call','Popen','PIPE','check_output','check_call'],
+    pathlib:['Path','PurePath','PosixPath','WindowsPath'],
+    threading:['Thread','Lock','RLock','Semaphore','Event','Timer','current_thread'],
+    requests:['get','post','put','delete','head','options','Session','Response','exceptions','status_codes'],
+    numpy:['array','arange','zeros','ones','linspace','reshape','dot','transpose','mean','sum','max','min','where','random','matmul'],
+    pandas:['read_csv','read_excel','read_json','DataFrame','Series','concat','merge','groupby','to_csv','to_json','options'],
+    httpx:['get','post','Client','Response','AsyncClient','download','stream'],
+    PIL:['Image','ImageDraw','ImageFont','ImageFilter','ImageOps','open','new','save','resize','crop'],
+    'PyYAML':['load','safe_load','dump','safe_dump','Loader'],
+    sysPath:['abspath','dirname','basename','join','exists','isdir','isfile','split','splitext']
+  },
+  javascript: {
+    console:['log','info','warn','error','debug','table','trace','time','timeEnd','group','groupEnd','clear','count','assert'],
+    Math:['random','floor','ceil','round','abs','sqrt','pow','max','min','PI','E','trunc','sign','hypot','log','exp','sin','cos','tan'],
+    JSON:['parse','stringify'],
+    Object:['keys','values','entries','assign','create','defineProperty','freeze','seal','getOwnPropertyNames','fromEntries','is'],
+    Array:['map','filter','reduce','forEach','find','findIndex','includes','push','pop','shift','unshift','slice','splice','sort','reverse','join','concat','flat','some','every','indexOf','from','of'],
+    String:['toUpperCase','toLowerCase','trim','split','slice','substring','replace','replaceAll','includes','startsWith','endsWith','indexOf','charAt','charCodeAt','padStart','padEnd','repeat','match','search','length'],
+    Number:['isNaN','isFinite','parseInt','parseFloat','toFixed','toPrecision','toString','MAX_VALUE','MIN_VALUE'],
+    Promise:['all','race','allSettled','any','resolve','reject','then','catch','finally'],
+    Map:['set','get','has','delete','clear','forEach','keys','values','entries','size'],
+    Set:['add','has','delete','clear','forEach','keys','values','entries','size'],
+    Date:['now','parse','UTC','getTime','setTime','getFullYear','getMonth','getDate','getHours','getMinutes','getSeconds','getDay','toISOString','toLocaleString','setFullYear','setMonth','setDate'],
+    RegExp:['test','exec','compile','source','flags','global','ignoreCase','multiline','lastIndex'],
+    process:['env','argv','version','platform','cwd','exit','stdout','stderr','stdin','nextTick','on','hrtime'],
+    fs:['readFile','readFileSync','writeFile','writeFileSync','appendFile','unlink','mkdir','rmdir','readdir','stat','existsSync','createReadStream','createWriteStream','rename','copyFile','watch'],
+    path:['join','resolve','parse','basename','dirname','extname','normalize','isAbsolute','relative','sep'],
+    os:['platform','arch','cpus','hostname','homedir','EOL','freemem','totalmem','tmpdir','type','release','uptime'],
+    http:['createServer','request','get','ServerResponse','IncomingMessage','STATUS_CODES'],
+    https:['get','request','createServer','Agent'],
+    crypto:['createHash','createHmac','randomBytes','randomUUID','sign','verify','generateKeyPair'],
+    readline:['createInterface','Interface','emitKeypressEvents'],
+    url:['parse','format','resolve','URL','URLSearchParams','pathToFileURL','fileURLToPath'],
+    util:['promisify','inspect','format','callbackify','types'],
+    Buffer:['from','alloc','allocUnsafe','concat','isBuffer','toString','byteLength','length'],
+    zlib:['gzip','gunzip','deflate','inflate','createGzip','createGunzip','brotliCompress','brotliDecompress']
+  },
+  typescript: {
+    console:['log','info','warn','error','debug','table'],
+    Math:['random','floor','ceil','round','abs','sqrt','pow','max','min','PI','E'],
+    JSON:['parse','stringify'],
+    Array:['map','filter','reduce','forEach','push','pop','slice','splice','find','includes','sort','join'],
+    String:['toUpperCase','toLowerCase','trim','split','slice','substring','replace','includes','startsWith','endsWith','indexOf','length'],
+    Promise:['all','race','resolve','reject','then','catch','finally'],
+    Map:['set','get','has','delete','size'],
+    Set:['add','has','delete','size'],
+    Date:['now','parse','UTC','getTime','toISOString','getFullYear','getMonth','getDate'],
+    process:['env','argv','version','platform','cwd','exit','stdout','stderr','stdin','nextTick'],
+    fs:['readFile','readFileSync','writeFile','writeFileSync','existsSync','readdir','mkdir','unlink','stat'],
+    path:['join','resolve','basename','dirname','extname','parse','normalize']
+  },
+  go: {
+    fmt:['Println','Printf','Print','Sprintf','Sprintln','Sprint','Errorf','Scanf','Scanln','Scan','Fprintf','Fprintln'],
+    os:['Open','Create','ReadFile','WriteFile','Stat','Remove','Mkdir','Exit','Getenv','Setenv','Args','Stdout','Stderr','Stdin','Getwd','Chdir','Rename'],
+    strings:['ToUpper','ToLower','Split','Join','Replace','Contains','HasPrefix','HasSuffix','Trim','Index','LastIndex','Repeat','Fields','Count'],
+    strconv:['Atoi','Itoa','ParseInt','FormatInt','ParseFloat','FormatFloat','Quote','Unquote'],
+    math:['Sqrt','Pow','Abs','Max','Min','Floor','Ceil','Round','Log','Log10','Sin','Cos','Tan','Pi','Rand'],
+    sort:['Slice','Strings','Ints','Float64s','Search','Comparator','Reverse'],
+    time:['Now','Since','Sleep','Duration','Second','Minute','Hour','Date','NewTicker','After','Format','Parse','Unix'],
+    sync:['WaitGroup','Mutex','RWMutex','Once','Cond','Pool','Map','New'],
+    'net/http':['Get','Post','PostForm','Head','NewRequest','Handle','HandleFunc','ListenAndServe','Server','Client','ResponseWriter','Request'],
+    json:['Marshal','Unmarshal','NewEncoder','NewDecoder','Encode','Decode','Valid'],
+    regexp:['Match','MatchString','Compile','MustCompile','FindString','FindAllString','ReplaceAllString','Split'],
+    bufio:['NewReader','NewWriter','NewScanner','ReadString','WriteString','Flush','Scan'],
+    path:['Join','Split','Base','Dir','Ext','Clean','IsAbs','FilePath'],
+    filepath:['Join','Split','Base','Dir','Ext','Clean','Glob','Walk','Abs','Rel','IsAbs'],
+    reflect:['TypeOf','ValueOf'],
+    encoding:['HexEncode','HexDecode'],
+    context:['Background','TODO','WithCancel','WithTimeout','WithValue','Canceled','DeadlineExceeded']
+  }
+};
+
+// Autocomplete: language words + identifiers already used in the document
+function dogeCompletions(cm) {
+  const word = /[\w$#]+/;
+  const cur = cm.getCursor();
+  const end = cur.ch;
+  const line = cm.getLine(cur.line);
+  let start = end - 1;
+  while (start >= 0 && word.test(line.charAt(start))) start--;
+  const prefix = line.slice(start + 1, end);
+  const doc = cm.getValue();
+
+  // Member access: prefix preceded by `.` or `::`
+  let mod = null;
+  if (start >= 0) {
+    const before = line.slice(0, start + 1);
+    const m = before.match(/(\w+)\s*([.:]{1,2})\s*$/);
+    if (m) mod = m[1];
+  }
+  const isCppMod = mod === 'std';
+
+  if (!prefix.length && !mod) return null;
+
+  // Collect candidates
+  const candidateSet = (langWords, inDoc) => {
+    const c = new Set();
+    for (const w of langWords) if (w.startsWith(prefix)) c.add(w);
+    for (const w of inDoc) if (w !== prefix && w.startsWith(prefix)) c.add(w);
+    return c;
+  };
+
+  if (mod) {
+    // Member completion from module map + doc usage
+    const inDoc = new Set();
+    const re = new RegExp('(?:^|[^\\w$])' + mod.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[.:]{1,2}\\s*([A-Za-z_$][\\w$]*)', 'g');
+    let mm;
+    while ((mm = re.exec(doc))) inDoc.add(mm[1]);
+    const modMap = (MODULE_MEMBERS[currentLang] || {});
+    const modWords = (isCppMod ? COMPLETE_WORDS.cpp : [...(modMap[mod] || [])]).filter(w => w.startsWith(prefix));
+    for (const w of modWords) inDoc.add(w);
+    const list = [...inDoc].filter(w => w.startsWith(prefix));
+    list.sort((a, b) => a.length - b.length || a.localeCompare(b));
+    if (!list.length) return null;
+    return { list, from: CodeMirror.Pos(cur.line, start + 1), to: cur };
+  }
+
+  // Preprocessor for c/cpp
+  if (['c','cpp'].includes(currentLang) && line.trimStart().startsWith('#') && !/\s/.test(prefix.slice(1))) {
+    const pre = ['#include','#define','#ifdef','#ifndef','#endif','#if','#else','#elif','#pragma','#undef'];
+    const headers = currentLang === 'cpp'
+      ? ['#include <iostream>','#include <vector>','#include <string>','#include <algorithm>','#include <map>','#include <unordered_map>','#include <set>','#include <cmath>','#include <cstdlib>','#include <cstring>','#include <cstdio>','#include <memory>','#include <stack>','#include <queue>','#include <deque>','#include <list>','#include <random>','#include <chrono>','#include <thread>','#include <functional>','#include <numeric>','#include <iterator>']
+      : ['#include <stdio.h>','#include <stdlib.h>','#include <string.h>','#include <math.h>','#include <stdint.h>','#include <stdbool.h>','#include <limits.h>','#include <float.h>','#include <time.h>','#include <stdarg.h>','#include <ctype.h>','#include <assert.h>'];
+    const list = [...pre, ...headers].filter(w => w.startsWith(line.slice(0, end)));
+    if (list.length) return { list, from: CodeMirror.Pos(cur.line, 0), to: cur };
+    return null;
+  }
+
+  const langWords = COMPLETE_WORDS[currentLang] || [];
+  const inDoc = new Set();
+  const re = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+  let mm;
+  while ((mm = re.exec(doc))) inDoc.add(mm[0]);
+  const cand = candidateSet(langWords, inDoc);
+  const list = [...cand].filter(w => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(w));
+  list.sort((a, b) => {
+    const sa = (langWords.includes(a) ? 1 : 0) + (a.startsWith(prefix.slice(0, 2)) ? 1 : 0);
+    const sb = (langWords.includes(b) ? 1 : 0) + (b.startsWith(prefix.slice(0, 2)) ? 1 : 0);
+    return sb - sa || a.length - b.length || a.localeCompare(b);
+  });
+  if (!list.length) return null;
+  return { list, from: CodeMirror.Pos(cur.line, start + 1), to: cur };
+}
+
+// Auto-trigger completion while typing
+function bindAutoComplete() {
+  let timer = null;
+  editor.on('inputRead', (cm, change) => {
+    if (change.origin !== '+input' && change.origin !== 'complete') return;
+    const ch = change.text.join('');
+    if (!/[A-Za-z0-9_$.#]/.test(ch)) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const w = dogeCompletions(cm);
+      if (w && w.list && w.list.length) cm.showHint({ hint: () => w, completeSingle: false });
+    }, 180);
+  });
+}
+
+// ── Copy with formatting (like VSCode: syntax colors go into the clipboard as HTML) ──
+const TOKEN_COLORS = {
+  'keyword':'#82d2ce','cm-keyword':'#82d2ce','operator':'#82d2ce','cm-operator':'#82d2ce',
+  'atom':'#82d2ce','cm-atom':'#82d2ce','qualifier':'#82d2ce','cm-qualifier':'#82d2ce',
+  'variable-2':'#87c3ff','cm-variable-2':'#87c3ff','variable-3':'#82d2ce','cm-variable-3':'#82d2ce',
+  'variable':'#d6d6dd','cm-variable':'#d6d6dd','def':'#f0f0f0','cm-def':'#f0f0f0',
+  'property':'#aaa0fa','cm-property':'#aaa0fa','builtin':'#f8c762','cm-builtin':'#f8c762',
+  'number':'#ebc88d','cm-number':'#ebc88d','string':'#e394dc','cm-string':'#e394dc',
+  'string-2':'#e394dc','cm-string-2':'#e394dc','comment':'#f0f0f09a','cm-comment':'#f0f0f09a',
+  'meta':'#a8cc7c','cm-meta':'#a8cc7c','error':'#f14c4c','cm-error':'#f14c4c',
+  'punctuation':'#d6d6dd','cm-punctuation':'#d6d6dd','bracket':'#d6d6dd','cm-bracket':'#d6d6dd',
+  'tag':'#87c3ff','cm-tag':'#87c3ff','attribute':'#aaa0fa','cm-attribute':'#aaa0fa',
+  'header':'#87c3ff','cm-header':'#87c3ff','strong':'#f0f0f0','cm-strong':'#f0f0f0',
+  'em':'#f0f0f0','cm-em':'#f0f0f0','link':'#aaa0fa','cm-link':'#aaa0fa',
+  'url':'#e394dc','cm-url':'#e394dc'
+};
+
+function escHtml(s){
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function tokenColor(type){
+  if (!type) return null;
+  for (const w of type.split(/\s+/)) {
+    if (TOKEN_COLORS[w]) return TOKEN_COLORS[w];
+    const prefixed = w.startsWith('cm-') ? w : 'cm-' + w;
+    if (TOKEN_COLORS[prefixed]) return TOKEN_COLORS[prefixed];
+  }
+  return null;
+}
+function tokenItalic(type){
+  if (!type) return false;
+  const words = type.split(/\s+/);
+  return words.some(w => w === 'comment' || w === 'cm-comment' || w === 'em' || w === 'cm-em' || w === 'emphasis' || w === 'cm-emphasis');
+}
+
+// Build highlighted HTML for the current selection (uses the editor's live tokens)
+function buildSelectionHtml(cm) {
+  const start = cm.getCursor('start');
+  const end = cm.getCursor('end');
+  if (!start || !end || !cm.somethingSelected()) return null;
+  const lines = [];
+  for (let l = start.line; l <= end.line; l++) {
+    const lineText = cm.getLine(l) || '';
+    const L0 = (l === start.line) ? start.ch : 0;
+    const L1 = (l === end.line) ? end.ch : lineText.length;
+    let tokens;
+    try { tokens = cm.getLineTokens(l); } catch (err) { return null; }
+    let html = '';
+    let lastEnd = L0;
+    for (const t of tokens) {
+      if (!t.end || t.end <= L0 || t.start >= L1) continue;
+      const a = Math.max(t.start, L0);
+      const b = Math.min(t.end, L1);
+      if (a > lastEnd) html += escHtml(lineText.slice(lastEnd, a));
+      const color = tokenColor(t.type);
+      if (color) {
+        const prop = tokenItalic(t.type) ? `color:${color};font-style:italic` : `color:${color}`;
+        html += `<span style="${prop}">${escHtml(lineText.slice(a, b))}</span>`;
+      } else {
+        html += escHtml(lineText.slice(a, b));
+      }
+      lastEnd = b;
+    }
+    if (lastEnd < L1) html += escHtml(lineText.slice(lastEnd, L1));
+    lines.push(html);
+  }
+  return lines.join('<br>');
+}
+
+// Intercept copy: put rich HTML + plain text on the clipboard (VSCode-style)
+function bindRichCopy() {
+  const wrap = editor.getWrapperElement();
+  const onCopy = (e) => {
+    if (!editor.somethingSelected() || !e.clipboardData) return;
+    let html;
+    try { html = buildSelectionHtml(editor); } catch (err) { html = null; }
+    if (!html) return;
+    e.clipboardData.setData('text/plain', editor.getSelection());
+    e.clipboardData.setData('text/html',
+      '<meta charset="utf-8">\n<!--StartFragment-->\n' +
+      '<div style="background-color:#181818;color:#d6d6dd;font-family:\'Maple Mono\',\'Consolas\',\'Courier New\',monospace;white-space:pre;">' +
+      html + '</div>\n<!--EndFragment-->');
+    e.preventDefault();
+    showToast('已复制，含语法高亮（可直接粘贴到 Word）', 'success');
+  };
+  wrap.addEventListener('copy', onCopy, true);
+}
+
+// ── Undefined-name lint (red wavy underline, like VSCode) ──
+const LINT_SKIP_TYPES = /keyword|builtin|atom|number|string|comment|property|operator|punctuation|bracket|qualifier|link|url|meta|tag|attribute|header|strong|modifier|special|formatting|invalid|error|processing|annotation|overlay/;
+
+const LINT_KNOWN = {
+  python: ['self','cls','super','__name__','__file__','__doc__','__package__','__main__','__all__','__init__','__new__','__str__','__repr__','__eq__','__lt__','__iter__','__len__','__getitem__','__setitem__','__enter__','__exit__','__call__','__import__',
+    'Exception','ValueError','TypeError','KeyError','IndexError','AttributeError','ImportError','ModuleNotFoundError','NameError','NotImplementedError','ZeroDivisionError','RuntimeError','StopIteration','ArithmeticError','OverflowError','MemoryError','OSError','IOError','SyntaxError','IndentationError','KeyboardInterrupt','SystemExit','BaseException','GeneratorExit','AssertionError','FloatingPointError','ReferenceError','TabError','UnicodeError','UnicodeDecodeError','UnicodeEncodeError'],
+  javascript: ['undefined','null','NaN','Infinity','globalThis','Buffer','global','console','event','window','document','location','navigator'],
+  typescript: ['undefined','null','NaN','Infinity','globalThis','Buffer','global','console','window','document','location','navigator','unknown','never','any','string','number','boolean','object','symbol','void','bigint','Function','Array','Promise','Record','Partial','Required','Readonly','Pick','Omit','Exclude','Extract'],
+  go: ['true','false','nil','iota','len','cap','make','new','append','copy','panic','recover','close','delete','error','any','comparable',
+    'int','int8','int16','int32','int64','uint','uint8','uint16','uint32','uint64','uintptr','float32','float64','complex64','complex128','bool','string','byte','rune'],
+  c: ['NULL','TRUE','FALSE','EOF','stdin','stdout','stderr','size_t','ptrdiff_t','wchar_t','va_list','FILE','errno',
+    'int8_t','int16_t','int32_t','int64_t','uint8_t','uint16_t','uint32_t','uint64_t','intptr_t','uintptr_t'],
+  cpp: ['NULL','nullptr','TRUE','FALSE','EOF','stdin','stdout','stderr','size_t','ptrdiff_t','wchar_t','va_list','FILE','errno','std',
+    'int8_t','int16_t','int32_t','int64_t','uint8_t','uint16_t','uint32_t','uint64_t','intptr_t','uintptr_t','auto_ptr','shared_ptr','unique_ptr','weak_ptr']
+};
+
+function splitTopLevel(s) {
+  const out = []; let d = 0, cur = '';
+  for (const c of s) {
+    if (c === '(' || c === '[' || c === '{') d++;
+    else if (c === ')' || c === ']' || c === '}') d--;
+    if (c === ',' && d === 0) { out.push(cur); cur = ''; } else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+function idExtract(s) { return s.match(/[A-Za-z_$][\w$]*/g) || []; }
+
+// Collect definitions (names + name-position spans) for the current language
+function collectDefs(doc) {
+  const names = new Set();
+  const spans = [];
+  const lang = currentLang;
+  const IS_ID = /^[A-Za-z_$][\w$]*$/;
+  const A = (s, e) => { if (s >= e) return; const w = doc.slice(s, e); if (IS_ID.test(w)) { names.add(w); spans.push([s, e]); } };
+  const N = (w) => { if (IS_ID.test(w)) names.add(w); };
+  const addMN = (mm, g) => { const rel = doc.indexOf(mm[g], mm.index); A(rel, rel + mm[g].length); };
+  const paramsAll = (sig) => { for (const w of idExtract(sig)) N(w); };
+  const paramsFirst = (sig) => { for (const part of splitTopLevel(sig)) { const ids = idExtract(part); if (ids.length) N(ids[0]); } };
+  const paramsLast = (sig) => { for (const part of splitTopLevel(sig)) { const ids = idExtract(part); if (ids.length) N(ids[ids.length - 1]); } };
+  const CTRL = new Set(['if','for','while','switch','case','catch','sizeof','return','goto','do','else','delete','new','this','using','typedef','class','namespace','template','extern','static','const','volatile','register','inline','restrict','public','private','protected','friend','virtual','default','break','continue','struct','union','enum']);
+
+  if (lang === 'python') {
+    let m;
+    const reF = /\b(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/g;
+    while ((m = reF.exec(doc))) { addMN(m, 1); paramsAll(m[2]); }
+    const reC = /\bclass\s+([A-Za-z_]\w*)/g;
+    while ((m = reC.exec(doc))) addMN(m, 1);
+    const reA = /(?<![:<>\-=+*\/%&|^!])\b((?:[A-Za-z_]\w*\s*,\s*)*[A-Za-z_]\w*)\s*=(?!=)/g;
+    while ((m = reA.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reW = /\b([A-Za-z_]\w*)\s*:=(?!=)/g;
+    while ((m = reW.exec(doc))) N(m[1]);
+    const reGl = /\b(?:global|nonlocal)\s+([^\n;]+)/g;
+    while ((m = reGl.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reAn = /^[ \t]*([A-Za-z_]\w*)[ \t]*:[ \t]*(?!=)/gm;
+    while ((m = reAn.exec(doc))) N(m[1]);
+    const reFIn = /\bfor\s*\(?\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)?\s+in\b/g;
+    while ((m = reFIn.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reIm = /\bimport\s+([\w.]+(?:\s*,\s*[\w.]+)*)/g;
+    while ((m = reIm.exec(doc))) for (const part of m[1].split(',')) N((part.trim().split('.')[0]).trim());
+    const reFr = /\bfrom\s+[\w.]+\s+import\s+([^;\n]+)/g;
+    while ((m = reFr.exec(doc))) for (const part of m[1].split(',')) {
+      const seg = part.replace(/[()*]/g, '').trim();
+      const am = seg.match(/^\w+\s+as\s+(\w+)/);
+      N(am ? am[1] : (seg.match(/\w+/) || [''])[0]);
+    }
+    const reAs = /\bas\s+([A-Za-z_]\w*)/g;
+    while ((m = reAs.exec(doc))) N(m[1]);
+    const reL = /\blambda\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*:/g;
+    while ((m = reL.exec(doc))) for (const w of idExtract(m[1])) N(w);
+  } else if (lang === 'javascript' || lang === 'typescript') {
+    let m;
+    const reF = /\b(?:export\s+|async\s+|default\s+)*function\s*([A-Za-z_$]\w*)?\s*(?:<([^<>]*)>)?\s*\(([^)]*)\)/g;
+    while ((m = reF.exec(doc))) { if (m[1]) addMN(m, 1); if (m[2]) for (const w of idExtract(m[2])) N(w); paramsAll(m[3]); }
+    const reAr = /\(([^()]*)\)\s*(?::[^=;{}]*?)?=>/g;
+    while ((m = reAr.exec(doc))) paramsAll(m[1]);
+    const reA1 = /\b([A-Za-z_$]\w*)\s*=>/g;
+    while ((m = reA1.exec(doc))) N(m[1]);
+    const cutInit = (s) => {
+      let d = 0;
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (c === '(' || c === '[' || c === '{') d++;
+        else if (c === ')' || c === ']' || c === '}') d--;
+        else if (d === 0 && (c === '=' || c === ':')) {
+          if (c === '=' && (s[i + 1] === '=' || s[i + 1] === '>')) continue;
+          if (c === ':' && s[i + 1] === ':') continue;
+          return s.slice(0, i);
+        }
+      }
+      return s;
+    };
+    const reD = /\b(?:export\s+)?(?:let|const|var)\s+([^;\n]*?)(?=\s+(?:of|in)\s|[;\n]|$)/g;
+    while ((m = reD.exec(doc))) for (const part of splitTopLevel(m[1])) for (const w of idExtract(cutInit(part))) N(w);
+    const reFOf = /\bfor\s*\((?:const|let|var)\s+([A-Za-z_$]\w*(?:\s*,\s*[A-Za-z_$]\w*)*)\s+(?:of|in)\b/g;
+    while ((m = reFOf.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reCl = /\b(?:export\s+|default\s+)?class\s+([A-Za-z_$]\w*)/g;
+    while ((m = reCl.exec(doc))) addMN(m, 1);
+    const reMe = /([A-Za-z_$]\w*)\s*(?:<([^<>]*)>)?\s*\(([^)]*)\)\s*[{]/g;
+    while ((m = reMe.exec(doc))) { if (!CTRL.has(m[1])) { N(m[1]); if (m[2]) for (const w of idExtract(m[2])) N(w); paramsAll(m[3]); } }
+    const reIm = /\bimport\s+([^;'"]*?)\s+from\b/g;
+    while ((m = reIm.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reCa = /\bcatch\s*\(([^)]*)\)/g;
+    while ((m = reCa.exec(doc))) paramsAll(m[1]);
+    const reTy = /\b(?:interface|type|enum)\s+([A-Za-z_$]\w*)/g;
+    while ((m = reTy.exec(doc))) if (lang === 'typescript') addMN(m, 1);
+    if (lang === 'typescript') {
+      const reTp = /(?:function\s+[A-Za-z_$]\w*|(?:const|let|var)\s+[A-Za-z_$]\w*\s*=|(?:interface|type|class|enum)\s+[A-Za-z_$]\w*)\s*<([^<>]*)>/g;
+      while ((m = reTp.exec(doc))) for (const w of idExtract(m[1])) N(w);
+      const reEn = /\benum\s+([A-Za-z_$]\w*)\s*\{([^}]*)\}/g;
+      while ((m = reEn.exec(doc))) for (const w of idExtract(m[2])) N(w);
+      const reEx = /\b(?:extends|implements)\s+([^;{}\n]+)/g;
+      while ((m = reEx.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    }
+  } else if (lang === 'go') {
+    let m;
+    const reF1 = /\bfunc\s*\(([^)]*)\)\s*([A-Za-z_]\w*)\s*\(([^)]*)\)/g;
+    while ((m = reF1.exec(doc))) { addMN(m, 2); const rid = idExtract(m[1]); if (rid.length) N(rid[0]); paramsFirst(m[3]); }
+    const reF2 = /\bfunc\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/g;
+    while ((m = reF2.exec(doc))) { addMN(m, 1); paramsFirst(m[2]); }
+    const reV = /\b(?:var|const)\s+([A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)*)/g;
+    while ((m = reV.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reVb = /\bvar\s*\(\s*([^)]*)\)/g;
+    while ((m = reVb.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reD = /([A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)*)\s*:=/g;
+    while ((m = reD.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reT = /\btype\s+([A-Za-z_]\w*)/g;
+    while ((m = reT.exec(doc))) addMN(m, 1);
+    const reSI = /\b(?:struct|interface)\s*(?:\w+\s*)?\{([^}]*)\}/g;
+    while ((m = reSI.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reI = /\bimport\s+(?:([A-Za-z_]\w*)\s+)?"([^"]+)"/g;
+    while ((m = reI.exec(doc))) N(m[1] || m[2]);
+    const reIb = /\bimport\s*\(\s*([^)]*)\)/g;
+    while ((m = reIb.exec(doc))) for (const ln of m[1].split('\n')) {
+      const am = ln.match(/^\s*(?:[_]\s+)?"?(\w+?)"?\s*$/);
+      if (am) N(am[1]);
+      const al = ln.match(/^\s*(\w+)\s+"(?:[^"]+)"/);
+      if (al) N(al[1]);
+      const q = ln.match(/"([^"]+)"/);
+      if (q) N(q[1].split('/').pop());
+    }
+  } else if (lang === 'c' || lang === 'cpp') {
+    let m;
+    const reF = /([A-Za-z_]\w*|\*)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*[;{]/g;
+    while ((m = reF.exec(doc))) { if (!CTRL.has(m[1]) && m[1] !== m[2]) { N(m[2]); paramsLast(m[3]); } }
+    const DECL_KW = new Set(['if','for','while','switch','case','catch','sizeof','return','goto','do','else','typedef','using','class','namespace','template','public','private','protected','friend','virtual','operator','new','delete','this','break','continue','default']);
+    const reDecl = /(?:^|[;{}(])\s*([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*(?:<[^;{}]*?>)?)\s+(?![(=])/gm;
+    while ((m = reDecl.exec(doc))) {
+      if (idExtract(m[1]).some(w => DECL_KW.has(w))) continue;
+      let d = 0, end = reDecl.lastIndex;
+      for (; end < doc.length; end++) {
+        const c = doc[end];
+        if (c === '(' || c === '[' || c === '{') d++;
+        else if (c === ')' || c === ']' || c === '}') { if (d === 0) break; d--; }
+        else if (c === ';' && d === 0) break;
+      }
+      for (const part of splitTopLevel(doc.slice(reDecl.lastIndex, end))) {
+        const cut = part.search(/[\[=(]/);
+        const ids = idExtract(cut >= 0 ? part.slice(0, cut) : part);
+        if (ids.length) N(ids[ids.length - 1]);
+      }
+    }
+    const reRf = /\bfor\s*\([^;)]*?\b([A-Za-z_]\w*)\s*:/g;
+    while ((m = reRf.exec(doc))) N(m[1]);
+    const reRf2 = /\bfor\s*\([^;)]*?([\[{][^\]}]*[\]}])\s*:/g;
+    while ((m = reRf2.exec(doc))) for (const w of idExtract(m[1])) N(w);
+    const reTd = /\btypedef\s+[\s\S]*?\}\s*([A-Za-z_]\w*)\s*;/g;
+    while ((m = reTd.exec(doc))) N(m[1]);
+    const reTd2 = /\btypedef\s+(?:\w[\w\s\*]*?)\s*([A-Za-z_]\w*)\s*;/g;
+    while ((m = reTd2.exec(doc))) N(m[1]);
+    const reDf = /#[ \t]*define\s+([A-Za-z_]\w*)\s*(\(([^)]*)\))?/g;
+    while ((m = reDf.exec(doc))) { addMN(m, 1); if (m[3]) for (const w of idExtract(m[3])) N(w); }
+    const reEn = /\benum\s*([A-Za-z_]\w*)?\s*\{([^}]*)\}/g;
+    while ((m = reEn.exec(doc))) { if (m[1]) addMN(m, 1); for (const w of idExtract(m[2])) N(w); }
+    const reSt = /\b(?:struct|union|class)\s+([A-Za-z_]\w*)\s*(?:\{|;)/g;
+    while ((m = reSt.exec(doc))) addMN(m, 1);
+    if (lang === 'cpp') {
+      const reNs = /\busing\s+namespace\s+([A-Za-z_]\w*)/g;
+      while ((m = reNs.exec(doc))) N(m[1]);
+      const reAl = /\busing\s+([A-Za-z_]\w*)\s*=/g;
+      while ((m = reAl.exec(doc))) N(m[1]);
+      const reTpl = /\btemplate\s*<([^>]*)>/g;
+      while ((m = reTpl.exec(doc))) for (const w of idExtract(m[1])) N(w);
+      const reTm = />\s*([A-Za-z_]\w*)\s*(?:[;=,])/g;
+      while ((m = reTm.exec(doc))) N(m[1]);
+    }
+  }
+
+  spans.sort((a, b) => a[0] - b[0]);
+  return { names, spans };
+}
+
+// Mask string/comment/meta regions so definitions inside them aren't collected
+function maskDoc(cm) {
+  const doc = cm.getValue();
+  const arr = doc.split('');
+  const maskRanges = (from, to) => { for (let i = from; i < to; i++) if (arr[i] !== '\n' && arr[i] !== ' ') arr[i] = '\t'; };
+  const MASK_ONLY = /string|comment|meta/;
+  const off = []; off.push(0);
+  for (let i = 0; i < doc.length; i++) if (doc[i] === '\n') off.push(i + 1);
+  for (let l = 0; l < cm.lineCount(); l++) {
+    const toks = cm.getLineTokens(l, true);
+    for (const t of toks) {
+      if (t.type && MASK_ONLY.test(t.type) && t.string.charAt(0) !== '#') maskRanges(off[l] + t.start, off[l] + t.end);
+    }
+  }
+  return arr.join('');
+}
+
+let lintTimer = null;
+function lintDocument() {
+  const cm = editor;
+  if (!cm) return;
+  cm.getAllMarks().forEach(m => { if (m.className === 'cm-doge-undefined') m.clear(); });
+
+  const doc = cm.getValue();
+  const masked = maskDoc(cm);
+  const { names, spans } = collectDefs(masked);
+
+  const known = new Set(LINT_KNOWN[currentLang] || []);
+  for (const w of (COMPLETE_WORDS[currentLang] || [])) if (/^[A-Za-z_$][\w$]*$/.test(w)) known.add(w);
+
+  const off = []; off.push(0);
+  for (let i = 0; i < doc.length; i++) if (doc[i] === '\n') off.push(i + 1);
+
+  const marks = [];
+  for (let l = 0; l < cm.lineCount(); l++) {
+    const line = cm.getLine(l) || '';
+    const base = off[l];
+    const toks = cm.getLineTokens(l, true);
+    for (const t of toks) {
+      const w = t.string;
+      if (!w || !/^[A-Za-z_$][\w$]*$/.test(w)) continue;
+      if (t.type && LINT_SKIP_TYPES.test(t.type)) continue;
+      const gi = base + t.start;
+      const prev = doc[gi - 1];
+      if (prev === '.' || prev === ':' || prev === '@' || prev === '<' || prev === '>' || (prev === '>' && doc[gi - 2] === '-')) continue;
+      const next = doc[gi + w.length];
+      if (next === ':') continue;
+      // skip name-position spans (definitions themselves)
+      let skip = false;
+      for (const s of spans) { if (s[1] <= gi) continue; if (s[0] <= gi && gi < s[1]) { skip = true; break; } if (s[0] > gi) break; }
+      if (skip) continue;
+      if (names.has(w) || known.has(w)) continue;
+      if (w === '_' || /^__\w+__$/.test(w)) continue;
+      marks.push(cm.markText(CodeMirror.Pos(l, t.start), CodeMirror.Pos(l, t.start + w.length), { className: 'cm-doge-undefined' }));
+    }
+  }
+  window.__dogeLintCount = marks.length;
+}
+
+function scheduleLint() {
+  clearTimeout(lintTimer);
+  lintTimer = setTimeout(lintDocument, 450);
+}
+
+// Init
+function init() {
+  applyCodeSize();
+  initTabletUX();
+  buildTabs();
+  initEditor();
+  loadSavedState();
+  initResize();
+  initKeybindings();
+  updateLangInfo();
+}
+
+function buildTabs() {
+  const container = document.getElementById('langTabs');
+  container.innerHTML = '';
+  LANGUAGES.forEach((lang, i) => {
+    const tab = document.createElement('div');
+    tab.className = 'tab' + (lang.id === currentLang ? ' active' : '');
+    tab.dataset.lang = lang.id;
+    tab.innerHTML = `<span class="dot" style="background:${lang.color}"></span>${lang.name}`;
+    tab.onclick = () => switchLang(lang.id);
+    tab.title = `${lang.name} (${i+1})`;
+    container.appendChild(tab);
+  });
+}
+
+function initEditor() {
+  const lang = getLang(currentLang);
+  loadBreakpoints();
+  editor = CodeMirror.fromTextArea(document.getElementById('codeEditor'), {
+    mode: lang.mode,
+    theme: 'doge',
+    lineNumbers: true,
+    gutters: [BP_GUTTER, 'CodeMirror-linenumbers'],
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    styleActiveLine: true,
+    indentUnit: 4,
+    tabSize: 4,
+    indentWithTabs: false,
+    lineWrapping: true,
+    dragDrop: false,
+    viewportMargin: 30,
+    hintOptions: { hint: dogeCompletions, completeSingle: false },
+    extraKeys: {
+      'Ctrl-Enter': () => runCode(),
+      'Cmd-Enter': () => runCode(),
+      'Shift-Ctrl-Enter': () => debugCode(),
+      'Shift-Cmd-Enter': () => debugCode(),
+      'Ctrl-Space': 'autocomplete',
+      'Tab': (cm) => {
+        if (cm.somethingSelected()) {
+          cm.indentSelection('add');
+        } else {
+          cm.replaceSelection('    ', 'end');
+        }
+      }
+    }
+  });
+  editor.setValue(getSavedCode(currentLang) || lang.sample);
+  editor.on('change', () => {
+    saveCode(currentLang, editor.getValue());
+    scheduleLint();
+    scheduleBpSave();
+  });
+  editor.on('gutterClick', (cm, line, gutter) => {
+    if (gutter === BP_GUTTER) toggleBreakpoint(line);
+  });
+  renderBreakpoints();
+  bindAutoComplete();
+  bindRichCopy();
+  scheduleLint();
+}
+
+function getLang(id) {
+  return LANGUAGES.find(l => l.id === id);
+}
+
+function switchLang(id) {
+  if (isRunning || id === currentLang) return;
+  saveCode(currentLang, editor.getValue());
+  persistBreakpointsFromMarkers();
+  currentLang = id;
+  const lang = getLang(id);
+  editor.setOption('mode', lang.mode);
+  const saved = getSavedCode(id);
+  editor.setValue(saved || lang.sample);
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.lang === id));
+  updateLangInfo();
+  renderBreakpoints();
+  clearDebugPanel();
+  if (currentOutputTab === 'debug') switchOutputTab('stdout');
+  scheduleLint();
+}
+
+function updateLangInfo() {
+  const lang = getLang(currentLang);
+  document.getElementById('footerLang').textContent = `${lang.name} · ${lang.version}`;
+}
+
+// LocalStorage
+function storageKey(type, lang) {
+  return `doge-ide-${type}-${lang}`;
+}
+function saveCode(lang, code) {
+  try { localStorage.setItem(storageKey('code', lang), code); } catch(e) {}
+}
+function getSavedCode(lang) {
+  try { return localStorage.getItem(storageKey('code', lang)); } catch(e) { return null; }
+}
+function loadSavedState() {
+  try {
+    const saved = localStorage.getItem('doge-ide-last-lang');
+    if (saved && getLang(saved)) switchLang(saved);
+  } catch(e) {}
+}
+function saveCurrentLang() {
+  try { localStorage.setItem('doge-ide-last-lang', currentLang); } catch(e) {}
+}
+
+// ── Breakpoints (gutter dots, persisted per language) ──
+function loadBreakpoints() {
+  try { breakpoints = JSON.parse(localStorage.getItem('doge-ide-breakpoints') || '{}') || {}; }
+  catch(e) { breakpoints = {}; }
+}
+function bpMarkerNode() {
+  const d = document.createElement('div');
+  d.className = 'doge-bp-dot';
+  return d;
+}
+function getBreakpointLines() {
+  const out = [];
+  if (!editor) return out;
+  for (let i = 0; i < editor.lineCount(); i++) {
+    const info = editor.lineInfo(i);
+    if (info.gutterMarkers && info.gutterMarkers[BP_GUTTER]) out.push(i + 1);
+  }
+  return out;
+}
+function persistBreakpointsFromMarkers() {
+  breakpoints[currentLang] = getBreakpointLines();
+  try { localStorage.setItem('doge-ide-breakpoints', JSON.stringify(breakpoints)); } catch(e) {}
+}
+function scheduleBpSave() {
+  clearTimeout(bpSaveTimer);
+  bpSaveTimer = setTimeout(persistBreakpointsFromMarkers, 600);
+}
+function toggleBreakpoint(line) {
+  const info = editor.lineInfo(line);
+  const has = !!(info.gutterMarkers && info.gutterMarkers[BP_GUTTER]);
+  editor.setGutterMarker(line, BP_GUTTER, has ? null : bpMarkerNode());
+  persistBreakpointsFromMarkers();
+}
+function renderBreakpoints() {
+  if (!editor) return;
+  const set = new Set((breakpoints[currentLang] || []).map(Number));
+  for (let i = 0; i < editor.lineCount(); i++) {
+    editor.setGutterMarker(i, BP_GUTTER, set.has(i + 1) ? bpMarkerNode() : null);
+  }
+}
+
+// ── Debug (record & replay) ──
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Python: inject a sys.settrace harness that records every executed user line.
+function buildPythonHarness(bpLines) {
+  const src = [
+    'import sys as _d_sys, json as _d_json, atexit as _d_atexit',
+    '_d_main = _d_sys._getframe().f_code.co_filename',
+    '_d_events = []',
+    `_d_break = set(${JSON.stringify(bpLines)})`,
+    '_d_off = __DOGE_OFFSET__',
+    'def _d_repr(v):',
+    '    try:',
+    '        r = repr(v)',
+    '    except Exception:',
+    '        return "<unrepr>"',
+    '    return r if len(r) <= 160 else r[:160] + "..."',
+    'def _d_trace(frame, event, arg):',
+    '    if event != "line" or frame.f_code.co_filename != _d_main:',
+    '        return _d_trace',
+    `    if len(_d_events) >= ${MAX_TRACE_EVENTS}:`,
+    '        return None',
+    '    line = frame.f_lineno - _d_off',
+    '    if line < 1:',
+    '        return _d_trace',
+    '    loc = {}',
+    '    try:',
+    '        for k, v in list(frame.f_locals.items()):',
+    '            if k.startswith("_d_") or (k.startswith("__") and k.endswith("__")):',
+    '                continue',
+    '            loc[k] = _d_repr(v)',
+    '            if len(loc) >= 60:',
+    '                break',
+    '    except Exception:',
+    '        pass',
+    '    stack = []',
+    '    f = frame',
+    '    while f is not None:',
+    '        if f.f_code.co_filename == _d_main:',
+    '            sl = f.f_lineno - _d_off',
+    '            if sl >= 1:',
+    '                stack.append({"func": f.f_code.co_name, "line": sl})',
+    '        f = f.f_back',
+    '    _d_events.append({"line": line, "func": frame.f_code.co_name, "locals": loc, "stack": stack, "bp": line in _d_break})',
+    '    return _d_trace',
+    'def _d_dump():',
+    '    try:',
+    `        _d_sys.stdout.write("${TRACE_PREFIX}" + _d_json.dumps(_d_events, ensure_ascii=False) + "${TRACE_SUFFIX}\\n")`,
+    '        _d_sys.stdout.flush()',
+    '    except Exception:',
+    '        pass',
+    '_d_atexit.register(_d_dump)',
+    '_d_sys.settrace(_d_trace)',
+    'try:',
+    '    _d_sys._getframe().f_trace = _d_trace',
+    'except Exception:',
+    '    pass',
+  ];
+  const offset = src.length;
+  return src.join('\n').replace('__DOGE_OFFSET__', String(offset)) + '\n';
+}
+
+// Other languages: insert a stderr marker right before each breakpoint line.
+function markerStmt(langId, line) {
+  switch (langId) {
+    case 'javascript':
+    case 'typescript': return `console.error("${BP_PREFIX}${line}");`;
+    case 'go': return `println("${BP_PREFIX}${line}")`;
+    case 'c':
+    case 'cpp': return `fprintf(stderr, "${BP_PREFIX}${line}\\n");`;
+  }
+  return '';
+}
+function lineInstrumentable(lineIdx, lang) {
+  const line = editor.getLine(lineIdx) || '';
+  const t = line.trim();
+  if (!t) return false;
+  if (/^(\}|\{|\)|#|else\b|catch\b|finally\b|case\b|default\s*:|public\s*:|private\s*:|protected\s*:|\.|,|&&|\|\||\?)/.test(t)) return false;
+  if (/[\\,(\[+\-*/%&|^?:]$/.test(t)) return false;
+  if ((lang.id === 'c' || lang.id === 'cpp' || lang.id === 'go') && !/^\s/.test(line)) return false;
+  const toks = editor.getLineTokens(lineIdx, true);
+  let hasCode = false;
+  for (const tk of toks) {
+    if (/comment|string/.test(tk.type || '')) continue;
+    if (tk.string && tk.string.trim()) { hasCode = true; break; }
+  }
+  return hasCode;
+}
+function prepareDebugCode(lang, userCode, bpLines) {
+  if (lang.id === 'python') {
+    return { code: buildPythonHarness(bpLines) + userCode, mode: 'trace' };
+  }
+  const src = userCode.split('\n');
+  const out = [];
+  if (lang.id === 'c' || lang.id === 'cpp') out.push('#include <stdio.h>');
+  const safe = new Set();
+  src.forEach((line, i) => {
+    const ln = i + 1;
+    if (bpLines.includes(ln) && lineInstrumentable(i, lang)) {
+      const indent = (line.match(/^[ \t]*/) || [''])[0];
+      out.push(indent + markerStmt(lang.id, ln));
+      safe.add(ln);
+    }
+    out.push(line);
+  });
+  return { code: out.join('\n'), mode: 'marker', instrumented: safe };
+}
+
+async function requestExecution(body) {
+  const headers = { 'Content-Type': 'application/json' };
+  const apiKey = getSetting('apiKey', '');
+  if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+  const apiEndpoint = getSetting('apiEndpoint', 'https://uapis.cn/api/v1/execution/run');
+  const isFile = location.protocol === 'file:';
+  const isLocalHost = !isFile && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+  const proxyEndpoint = (isFile || !isLocalHost) ? 'http://localhost:8787/api/v1/execution/run' : '/api/v1/execution/run';
+  // 同源请求不会触发 CORS 预检，所以代理请求可以带上目标 endpoint（自定义 API 地址也能生效）。
+  const proxyHeaders = Object.assign({}, headers, { 'X-Doge-Upstream': apiEndpoint });
+  const doFetch = (url, h) => fetch(url, { method: 'POST', headers: h, body: JSON.stringify(body) });
+  const t0 = Date.now();
+  // 由本地壳提供页面时（桌面版 / proxy.py / Android App），壳已经会带上 API Key 转发，直接走代理。
+  const first = isLocalHost ? proxyEndpoint : apiEndpoint;
+  try {
+    const resp = await doFetch(first, isLocalHost ? proxyHeaders : headers);
+    return { data: await resp.json(), elapsed: Date.now() - t0, proxied: isLocalHost };
+  } catch (err) {
+    if (isLocalHost) return { error: err, proxyError: err };
+    try {
+      const resp = await doFetch(proxyEndpoint, proxyHeaders);
+      return { data: await resp.json(), elapsed: Date.now() - t0, proxied: true };
+    } catch (err2) {
+      return { error: err, proxyError: err2 };
+    }
+  }
+}
+
+function parseDebugOutput(data, mode, bpLines) {
+  let stdout = data.stdout || '';
+  let stderr = data.stderr || '';
+  const events = [];
+  if (mode === 'trace') {
+    const m = stdout.match(new RegExp(TRACE_PREFIX + '([\\s\\S]*?)' + TRACE_SUFFIX));
+    if (m) {
+      try { for (const e of JSON.parse(m[1])) events.push(e); } catch(e) {}
+      stdout = stdout.replace(new RegExp(TRACE_PREFIX + '[\\s\\S]*?' + TRACE_SUFFIX + '\\n?'), '');
+    }
+  } else {
+    const keep = [];
+    const bpSet = new Set(bpLines);
+    for (const line of stderr.split('\n')) {
+      const mm = line.match(new RegExp('^' + BP_PREFIX + '(\\d+)\\s*$'));
+      if (mm) events.push({ line: parseInt(mm[1], 10), func: '', locals: {}, stack: [], bp: bpSet.has(parseInt(mm[1], 10)) });
+      else keep.push(line);
+    }
+    stderr = keep.join('\n');
+  }
+  return { stdout, stderr, events };
+}
+
+function debugBtnHTML() {
+  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8h-2.81a5.99 5.99 0 0 0-1.82-2.29l1.32-1.32-1.41-1.41-1.83 1.83a6.03 6.03 0 0 0-2.45-.52c-.87 0-1.7.19-2.45.52L6.72 2.98 5.31 4.39 6.63 5.71A5.99 5.99 0 0 0 4.81 8H2v2h2.09a6.5 6.5 0 0 0 0 4H2v2h2.81a6 6 0 0 0 11.38 0H19v-2h-.09a6.5 6.5 0 0 0 0-4H19V8zM12 19a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg> Debug';
+}
+
+async function debugCode() {
+  if (isRunning) return;
+  const lang = getLang(currentLang);
+  const userCode = editor.getValue();
+  if (!userCode.trim()) { showToast('Code is empty!', 'error'); return; }
+  const bpLines = getBreakpointLines();
+  const prepared = prepareDebugCode(lang, userCode, bpLines);
+
+  isRunning = true;
+  saveCurrentLang();
+  persistBreakpointsFromMarkers();
+  const btn = document.getElementById('debugBtn');
+  btn.classList.add('running');
+  btn.innerHTML = '<span class="spinner"></span> Debugging...';
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot running';
+  clearDebugPanel();
+  outputData = { stdout:'', stderr:'', info:`[${lang.name}] 记录执行轨迹中...\n` };
+  currentOutputTab = 'stdout';
+  document.querySelectorAll('.output-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'stdout'));
+  renderOutput();
+
+  const body = {
+    language: lang.apiLang,
+    code: prepared.code,
+    stdin: document.getElementById('stdinInput').value || undefined,
+    timeout_ms: getSetting('timeout', 30000),
+  };
+  const packsCheck = document.getElementById('packsCheck');
+  if (packsCheck && packsCheck.checked && lang.packs.length) body.packs = lang.packs;
+
+  const res = await requestExecution(body);
+  btn.classList.remove('running');
+  btn.innerHTML = debugBtnHTML();
+  isRunning = false;
+
+  if (res.error) {
+    dot.className = 'status-dot error';
+    outputData.stderr = `调试请求失败：${res.error.message}\n\n请检查网络，或启动本地代理后重试。`;
+    outputData.info = `[${lang.name}] Debug failed\n`;
+    renderOutput();
+    showToast('✗ 调试请求失败', 'error');
+    return;
+  }
+
+  const { data, elapsed } = res;
+  const parsed = parseDebugOutput(data, prepared.mode, bpLines);
+  const events = parsed.events.map(e => ({ func:'', locals:{}, stack:[], ...e }));
+  outputData.stdout = parsed.stdout;
+  outputData.stderr = parsed.stderr;
+  let extra = '';
+  if (lang.id === 'python') extra = '（Python 轨迹包含每个执行行）';
+  else if (prepared.instrumented && prepared.instrumented.size < bpLines.length) {
+    extra = `（有 ${bpLines.length - prepared.instrumented.size} 个断点所在行不适合插桩，已跳过）`;
+  }
+  if (prepared.mode === 'trace' && !events.length && data.status === 'success') {
+    extra += '（未收到轨迹数据，可能 stdout 被截断）';
+  }
+  outputData.info = buildInfo(data, elapsed) + `\n断点: ${bpLines.length} · 轨迹事件: ${events.length} ${extra}`;
+  debugState = { events, index: events.length ? 0 : -1, lang: currentLang };
+
+  const sc = document.getElementById('stderrCount');
+  if (outputData.stderr) {
+    sc.textContent = outputData.stderr.split('\n').length;
+    sc.style.display = 'inline';
+  } else {
+    sc.style.display = 'none';
+  }
+
+  const count = document.getElementById('debugCount');
+  count.textContent = events.length;
+  count.style.display = events.length ? 'inline' : 'none';
+
+  if (data.status !== 'success' && !events.length) {
+    dot.className = 'status-dot error';
+    showToast('调试运行失败，见 stderr', 'error');
+  } else {
+    dot.className = 'status-dot success';
+    showToast(`✓ 调试完成：${events.length} 个轨迹点`, 'success');
+  }
+  switchOutputTab('debug');
+  if (events.length) debugSelect(0);
+}
+
+function clearDebugPanel() {
+  debugState = { events: [], index: -1, lang: null };
+  if (debugLineHandle) {
+    editor.removeLineClass(debugLineHandle, 'background', 'doge-debug-line');
+    debugLineHandle = null;
+  }
+  const count = document.getElementById('debugCount');
+  if (count) count.style.display = 'none';
+}
+function highlightDebugLine(lineNo) {
+  if (!editor) return;
+  if (debugLineHandle) { editor.removeLineClass(debugLineHandle, 'background', 'doge-debug-line'); debugLineHandle = null; }
+  const l = Math.max(0, Math.min(editor.lineCount() - 1, lineNo - 1));
+  debugLineHandle = editor.getLineHandle(l);
+  editor.addLineClass(debugLineHandle, 'background', 'doge-debug-line');
+  editor.scrollIntoView({ line: l, ch: 0 }, 140);
+}
+function debugSelect(i) {
+  const ev = debugState.events;
+  if (!ev.length) return;
+  i = Math.max(0, Math.min(ev.length - 1, i));
+  debugState.index = i;
+  highlightDebugLine(ev[i].line);
+  if (currentOutputTab !== 'debug') switchOutputTab('debug');
+  else renderOutput();
+}
+function debugNav(delta) {
+  if (!debugState.events.length) return;
+  debugSelect(debugState.index + delta);
+}
+function debugNextBp() {
+  const ev = debugState.events;
+  for (let i = debugState.index + 1; i < ev.length; i++) {
+    if (ev[i].bp) { debugSelect(i); return; }
+  }
+  showToast('没有更多断点命中', 'info');
+}
+function renderDebugPanel() {
+  if (!debugState.events.length) {
+    return '<span class="output-placeholder">暂无调试轨迹：点击行号左侧圆点设置断点，然后点 Debug（Ctrl+Shift+Enter）。</span>';
+  }
+  const ev = debugState.events;
+  const idx = debugState.index;
+  const cur = ev[idx] || {};
+  const start = Math.max(0, idx - 60), end = Math.min(ev.length, idx + 61);
+  let rows = '';
+  if (start > 0) rows += `<div class="debug-hint">… 前面还有 ${start} 个轨迹点</div>`;
+  for (let i = start; i < end; i++) {
+    const e = ev[i];
+    rows += `<div class="debug-ev${i === idx ? ' active' : ''}${e.bp ? ' bp' : ''}" onclick="debugSelect(${i})"><span class="ln">L${e.line}</span><span>${escapeHtml(e.func || '')}</span>${e.bp ? '<span>● 断点</span>' : ''}</div>`;
+  }
+  if (end < ev.length) rows += `<div class="debug-hint">… 后面还有 ${ev.length - end} 个轨迹点</div>`;
+  const locals = (cur.locals && Object.keys(cur.locals).length)
+    ? '<table class="debug-locals">' + Object.entries(cur.locals).map(([k, v]) => `<tr><td class="k">${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('') + '</table>'
+    : '<div class="debug-hint">(该语言暂无变量信息；Python 可查看局部变量)</div>';
+  const stack = (cur.stack && cur.stack.length)
+    ? cur.stack.map((f, i) => `<div class="${i === 0 ? 'cur' : ''}">${i === 0 ? '▶ ' : '└ '}${escapeHtml(f.func)} <span style="color:var(--fg3)">L${f.line}</span></div>`).join('')
+    : '<div class="debug-hint">(无调用栈)</div>';
+  return `<div class="debug-bar">
+    <button onclick="debugNav(-1e9)" ${idx <= 0 ? 'disabled' : ''}>⏮ 首个</button>
+    <button onclick="debugNav(-1)" ${idx <= 0 ? 'disabled' : ''}>◀ 上一步</button>
+    <span class="debug-pos">${idx + 1} / ${ev.length}</span>
+    <button onclick="debugNav(1)" ${idx >= ev.length - 1 ? 'disabled' : ''}>下一步 ▶</button>
+    <button onclick="debugNav(1e9)" ${idx >= ev.length - 1 ? 'disabled' : ''}>最后 ⏭</button>
+    <button onclick="debugNextBp()">跳到下一断点</button>
+  </div>
+  <div class="debug-list">${rows}</div>
+  <div class="debug-detail">
+    <h4>调用栈</h4>${stack}
+    <h4>局部变量</h4>${locals}
+  </div>`;
+}
+
+// Run
+async function runCode() {
+  if (isRunning) return;
+  const lang = getLang(currentLang);
+  const code = editor.getValue();
+  const stdin = document.getElementById('stdinInput').value;
+
+  if (!code.trim()) {
+    showToast('Code is empty!', 'error');
+    return;
+  }
+
+  isRunning = true;
+  saveCurrentLang();
+  clearDebugPanel();
+  if (currentOutputTab === 'debug') {
+    currentOutputTab = 'stdout';
+    document.querySelectorAll('.output-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'stdout'));
+  }
+  const btn = document.getElementById('runBtn');
+  btn.classList.add('running');
+  btn.innerHTML = '<span class="spinner"></span> Running...';
+
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot running';
+
+  outputData = { stdout:'', stderr:'', info:`[${lang.name}] Submitting...\n` };
+  renderOutput();
+
+  const body = {
+    language: lang.apiLang,
+    code: code,
+    stdin: stdin || undefined,
+    timeout_ms: getSetting('timeout', 30000),
+  };
+
+  // Packs toggle
+  const packsCheck = document.getElementById('packsCheck');
+  if (packsCheck && packsCheck.checked && lang.packs.length) {
+    body.packs = lang.packs;
+  }
+
+  // Headers
+  const headers = { 'Content-Type': 'application/json' };
+  const apiKey = getSetting('apiKey', '');
+  if (apiKey) {
+    headers['Authorization'] = 'Bearer ' + apiKey;
+  }
+
+  const apiEndpoint = getSetting('apiEndpoint', 'https://uapis.cn/api/v1/execution/run');
+  const isFile = location.protocol === 'file:';
+  const isLocalHost = !isFile && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+  const proxyEndpoint = (isFile || !isLocalHost) ? 'http://localhost:8787/api/v1/execution/run' : '/api/v1/execution/run';
+  // 由本地壳提供页面时（桌面版 / proxy.py / Android App），壳会带上 API Key 转发，直接走代理，省掉一次 CORS 往返。
+  const useProxyFirst = isLocalHost;
+  const proxyHeaders = Object.assign({}, headers, { 'X-Doge-Upstream': apiEndpoint });
+
+  const MAX_ATTEMPTS = 5;
+  const attemptTimeoutMs = (Number(getSetting('timeout', 30000)) || 30000) + 30000;
+
+  // 单次请求设硬上限：网络/沙盒卡住时中止并重试，保证界面不会一直转
+  async function execFetch(url, h) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), attemptTimeoutMs) : null;
+    try {
+      return await fetch(url, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify(body),
+        signal: controller ? controller.signal : undefined,
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function parseBody(r) {
+    const text = await r.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return { status: 'http_error', message: `HTTP ${r.status} ${r.statusText || ''}: ${text.slice(0, 300)}` };
+    }
+  }
+
+  // 云端沙盒偶发 tool_unavailable（进程/线程被 cgroup 限制，os error 11）与 429 限流，
+  // 立刻重试通常就能成功，避免用户看到一串底层 errno。
+  const isSandboxBusy = (r, d) => r.status === 429 || r.status >= 500 ||
+    (d && (d.status === 'tool_unavailable' || d.status === 'rate_limited'));
+
+  let resp, data, elapsed;
+  let viaProxy = useProxyFirst;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const t0 = Date.now();
+      resp = await execFetch(viaProxy ? proxyEndpoint : apiEndpoint, viaProxy ? proxyHeaders : headers);
+      data = await parseBody(resp);
+      elapsed = Date.now() - t0;
+      if (isSandboxBusy(resp, data) && attempt < MAX_ATTEMPTS) {
+        outputData.info = `[${lang.name}] 云端沙盒繁忙（${data.status || 'HTTP ' + resp.status}），重试 ${attempt}/${MAX_ATTEMPTS - 1}...\n`;
+        renderOutput();
+        await new Promise(resolve => setTimeout(resolve, 400 * attempt));
+        continue;
+      }
+      break;
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      const timedOut = (err && err.name === 'AbortError') || /abort/i.test(msg);
+      const corsBlocked = msg.includes('Failed to fetch') || msg.includes('CORS') || msg.includes('NetworkError');
+      if (timedOut && attempt < MAX_ATTEMPTS) {
+        outputData.info = `[${lang.name}] 请求超时（${Math.round(attemptTimeoutMs / 1000)}s），重试 ${attempt}/${MAX_ATTEMPTS - 1}...\n`;
+        renderOutput();
+        continue;
+      }
+      if (!viaProxy && corsBlocked && attempt < MAX_ATTEMPTS) {
+        viaProxy = true;
+        showToast('Proxy mode active (localhost:8787)', 'info');
+        continue;
+      }
+      dot.className = 'status-dot error';
+      if (viaProxy) {
+        outputData.stderr = `本地转发失败：${msg}\n\n请检查网络连接后重试。`;
+        outputData.info = `[${lang.name}] Local proxy failed\n`;
+        showToast('✗ 网络请求失败', 'error');
+      } else if (corsBlocked) {
+        outputData.stderr = `CORS blocked the direct API call.\n\n` +
+          `To fix this, start the local proxy:\n\n` +
+          `  Node.js:  node proxy.mjs\n` +
+          `  Python:   python proxy.py\n\n` +
+          `Then open: http://localhost:8787\n\n` +
+          `Or paste your API key in Settings (⚙) to use direct mode.`;
+        outputData.info = `[${lang.name}] CORS blocked\n`;
+        showToast('Proxy not running - see output', 'error');
+      } else {
+        outputData.stderr = `Network error: ${msg}\n\nMake sure you have internet access.`;
+        outputData.info = `[${lang.name}] Request failed\n`;
+        showToast('✗ Network Error', 'error');
+      }
+      isRunning = false;
+      btn.classList.remove('running');
+      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run <kbd>Ctrl+↵</kbd>`;
+      renderOutput();
+      return;
+    }
+  }
+
+  if (!data) {
+    isRunning = false;
+    btn.classList.remove('running');
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run <kbd>Ctrl+↵</kbd>`;
+    renderOutput();
+    return;
+  }
+
+  try {
+    if (data.status === 'success') {
+      dot.className = 'status-dot success';
+      outputData.stdout = data.stdout || '(no output)';
+      outputData.stderr = data.stderr || '';
+      outputData.info = buildInfo(data, elapsed);
+      showToast(`✓ Completed in ${data.run_ms || elapsed}ms`, 'success');
+    } else if (data.status === 'compile_error') {
+      dot.className = 'status-dot error';
+      outputData.stderr = data.stderr || data.message || 'Compile error';
+      outputData.info = buildInfo(data, elapsed);
+      showToast('✗ Compile Error', 'error');
+    } else if (data.status === 'runtime_error') {
+      dot.className = 'status-dot error';
+      outputData.stderr = data.stderr || data.message || 'Runtime error';
+      outputData.stdout = data.stdout || '';
+      outputData.info = buildInfo(data, elapsed);
+      showToast('✗ Runtime Error', 'error');
+    } else if (data.status === 'timeout') {
+      dot.className = 'status-dot error';
+      outputData.stdout = data.stdout || '';
+      const earlyKill = data.run_ms && data.run_ms < (data.timeout_ms || 30000);
+      outputData.stderr = `Execution timed out (${data.timeout_ms || 30000}ms limit)` +
+        (earlyKill ? `\n注意：进程只运行了 ${data.run_ms}ms 就被沙盒杀掉（signal ${data.signal != null ? data.signal : '?'}），可能是沙盒侧异常而非真的超时。` : '');
+      outputData.info = buildInfo(data, elapsed);
+      showToast('✗ Timeout', 'error');
+    } else if (data.status === 'tool_unavailable' || data.status === 'rate_limited') {
+      dot.className = 'status-dot error';
+      outputData.stderr = `云端沙盒繁忙（${data.status}），已自动重试 ${MAX_ATTEMPTS - 1} 次仍未成功，请稍后再试。\n\n原始错误：${data.error || data.message || data.status}`;
+      outputData.info = buildInfo(data, elapsed);
+      showToast('✗ 云端沙盒繁忙', 'error');
+    } else {
+      dot.className = 'status-dot error';
+      outputData.stderr = data.message || data.error || JSON.stringify(data, null, 2);
+      outputData.info = buildInfo(data, elapsed);
+      showToast('✗ Error: ' + (data.code || 'Unknown'), 'error');
+    }
+  } catch (err) {
+    dot.className = 'status-dot error';
+    outputData.stderr = `Network error: ${err.message}\n\nMake sure you have internet access.\nIf CORS blocks the request, check browser console.`;
+    outputData.info = `[${lang.name}] Request failed\n`;
+    showToast('✗ Network Error', 'error');
+  }
+
+  // Update stderr count
+  const count = document.getElementById('stderrCount');
+  if (outputData.stderr) {
+    count.textContent = outputData.stderr.split('\n').length;
+    count.style.display = 'inline';
+  } else {
+    count.style.display = 'none';
+  }
+
+  isRunning = false;
+  btn.classList.remove('running');
+  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run <kbd>Ctrl+↵</kbd>`;
+  renderOutput();
+}
+
+function buildInfo(data, elapsed) {
+  const lines = [];
+  lines.push(`Language: ${data.language || currentLang}`);
+  if (data.exit_code !== undefined && data.exit_code !== null) lines.push(`Exit code: ${data.exit_code}`);
+  if (data.compile_ms) lines.push(`Compile: ${data.compile_ms}ms`);
+  if (data.run_ms) lines.push(`Runtime: ${data.run_ms}ms`);
+  lines.push(`Total: ${data.total_ms || elapsed}ms`);
+  if (data.timed_out) lines.push('⚠ Timed out');
+  if (data.stdout_truncated) lines.push('⚠ stdout truncated');
+  if (data.stderr_truncated) lines.push('⚠ stderr truncated');
+  return lines.join('\n');
+}
+
+// Output
+function switchOutputTab(tab) {
+  currentOutputTab = tab;
+  document.querySelectorAll('.output-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  renderOutput();
+}
+
+function renderOutput() {
+  const el = document.getElementById('outputContent');
+  if (currentOutputTab === 'debug') {
+    el.className = 'output-content debug';
+    el.innerHTML = renderDebugPanel();
+    return;
+  }
+  const content = outputData[currentOutputTab] || '';
+  el.className = 'output-content ' + currentOutputTab;
+  if (!content) {
+    el.innerHTML = currentOutputTab === 'stdout'
+      ? '<span class="output-placeholder">点击 Run 或按 Ctrl+Enter 运行代码...</span>'
+      : '<span class="output-placeholder">(empty)</span>';
+  } else {
+    el.textContent = content;
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+// Stdin toggle
+let stdinVisible = true;
+function toggleStdin() {
+  stdinVisible = !stdinVisible;
+  const input = document.getElementById('stdinInput');
+  const header = document.getElementById('stdinHeader');
+  if (stdinVisible) {
+    input.classList.remove('hidden');
+    header.classList.remove('collapsed');
+  } else {
+    input.classList.add('hidden');
+    header.classList.add('collapsed');
+  }
+}
+
+// Tablet / touch adaptation
+const COARSE_POINTER = !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
+
+function defaultCodeSize() {
+  return COARSE_POINTER ? 15 : 14;
+}
+
+function applyCodeSize() {
+  const px = Math.min(24, Math.max(11, parseInt(getSetting('codeSize', defaultCodeSize()), 10) || defaultCodeSize()));
+  document.documentElement.style.setProperty('--code-size', px + 'px');
+  const input = document.getElementById('codeSizeInput');
+  if (input && document.activeElement !== input) input.value = px;
+  if (editor) editor.refresh();
+}
+
+function initTabletUX() {
+  // Soft keyboard: give the focused input room, hide chrome that is only in the way.
+  const vv = window.visualViewport;
+  if (vv) {
+    let base = vv.height;
+    const sync = () => {
+      const open = vv.height < base - 120;
+      document.body.classList.toggle('kb-open', open);
+      if (!open) base = Math.max(base, vv.height);
+      const el = document.activeElement;
+      if (open && el && el.scrollIntoView && !el.closest('.CodeMirror')) {
+        el.scrollIntoView({ block: 'center' });
+      }
+    };
+    vv.addEventListener('resize', sync);
+  }
+  // Long-press / double-tap must not raise the WebView context menu or zoom outside the editor.
+  document.addEventListener('contextmenu', (e) => {
+    if (!e.target.closest('.CodeMirror, .output-content, .debug-detail, input, textarea')) e.preventDefault();
+  });
+  document.addEventListener('dblclick', (e) => {
+    if (!e.target.closest('.CodeMirror, .output-content, input, textarea')) e.preventDefault();
+  });
+}
+
+// Resize (pointer events: mouse / touch / stylus)
+function initResize() {
+  const handle = document.getElementById('resizeHandle');
+  const outputPanel = document.getElementById('outputPanel');
+  let startX = 0, startWidth = 0, dragging = false;
+
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    dragging = true;
+    startX = e.clientX;
+    startWidth = outputPanel.offsetWidth;
+    handle.classList.add('active');
+    try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const dx = startX - e.clientX;
+    const w = Math.max(250, Math.min(startWidth + dx, window.innerWidth * 0.65));
+    outputPanel.style.width = w + 'px';
+  });
+
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('active');
+    try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
+    if (editor) editor.refresh();
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+}
+
+// Keybindings
+function initKeybindings() {
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+Shift+Enter = Debug
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
+      e.preventDefault();
+      debugCode();
+      return;
+    }
+    // Ctrl+Enter = Run
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      runCode();
+      return;
+    }
+    // Ctrl+S = Save
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      saveCode(currentLang, editor.getValue());
+      showToast('Code saved locally', 'info');
+      return;
+    }
+    // Ctrl+L = Clear output
+    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+      e.preventDefault();
+      outputData = { stdout:'', stderr:'', info:'' };
+      document.getElementById('statusDot').className = 'status-dot';
+      clearDebugPanel();
+      renderOutput();
+      document.getElementById('stderrCount').style.display = 'none';
+      return;
+    }
+    // Ctrl+I = Toggle stdin
+    if ((e.ctrlKey || e.metaKey) && e.key === 'i') {
+      e.preventDefault();
+      toggleStdin();
+      return;
+    }
+    // Ctrl+D = Toggle theme (placeholder)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+      e.preventDefault();
+      showToast('Theme toggle - coming soon!', 'info');
+      return;
+    }
+    // Ctrl+1~6 = Switch language
+    if ((e.ctrlKey || e.metaKey) && e.key >= '1' && e.key <= '6') {
+      e.preventDefault();
+      const idx = parseInt(e.key) - 1;
+      if (LANGUAGES[idx]) switchLang(LANGUAGES[idx].id);
+      return;
+    }
+  });
+}
+
+// Settings
+function toggleSettings() {
+  const panel = document.getElementById('settingsPanel');
+  panel.classList.toggle('show');
+  if (panel.classList.contains('show')) {
+    // Load current settings
+    document.getElementById('apiKeyInput').value = getSetting('apiKey', '');
+    document.getElementById('apiEndpoint').value = getSetting('apiEndpoint', 'https://uapis.cn/api/v1/execution/run');
+    document.getElementById('timeoutInput').value = getSetting('timeout', 30000);
+    document.getElementById('codeSizeInput').value = getSetting('codeSize', defaultCodeSize());
+  }
+}
+
+function saveSettings() {
+  setSetting('apiKey', document.getElementById('apiKeyInput').value.trim());
+  setSetting('apiEndpoint', document.getElementById('apiEndpoint').value.trim());
+  setSetting('timeout', parseInt(document.getElementById('timeoutInput').value) || 30000);
+  setSetting('codeSize', parseInt(document.getElementById('codeSizeInput').value) || defaultCodeSize());
+  applyCodeSize();
+  toggleSettings();
+  showToast('Settings saved', 'success');
+}
+
+function getSetting(key, defaultVal) {
+  try {
+    const val = localStorage.getItem('doge-ide-' + key);
+    if (val === null) return defaultVal;
+    if (key === 'timeout' || key === 'codeSize') {
+      const n = parseInt(val, 10);
+      return isNaN(n) ? defaultVal : n;
+    }
+    return val;
+  } catch(e) { return defaultVal; }
+}
+
+function setSetting(key, val) {
+  try { localStorage.setItem('doge-ide-' + key, val); } catch(e) {}
+}
+
+// Toast
+function showToast(msg, type='info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + type + ' show';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// Modal
+function closeModal() {
+  document.getElementById('shortcutModal').classList.remove('show');
+}
+
+// Start
+init();
+</script>
+</body>
+</html>

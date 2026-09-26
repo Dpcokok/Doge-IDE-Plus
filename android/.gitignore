@@ -1,0 +1,9 @@
+# Gradle / SDK 缓存与构建产物
+.gradle/
+.gradle-dist/
+build/
+app/build/
+local.properties
+keystore.properties
+*.jks
+*.keystore

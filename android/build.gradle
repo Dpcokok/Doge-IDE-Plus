@@ -1,0 +1,8 @@
+// Doge IDE - Android 壳。零第三方依赖：Activity + WebView + 进程内迷你 HTTP 服务。
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}
