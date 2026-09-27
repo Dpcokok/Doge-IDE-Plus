@@ -102,6 +102,17 @@ APK 里的 assets 就是仓库根目录的 `doge-ide.html`（构建时改名为 
 `LocalServer` 只监听 `127.0.0.1`，8 个工作线程，HTTP/1.1 keep-alive，
 静态资源带 `max-age=86400`，API 响应 `no-store`。
 
+## 1.1 项目工作区（开发中）
+
+`local-runtime` 的下一阶段已加入本地项目基础模型：WebView 使用 `localStorage`
+保存项目文件列表和内容，编辑器左侧显示文件列表，支持切换、新建和删除 C/C++
+源文件或头文件。Run 请求携带 `files` 和 `entry`，Android 执行器会把头文件写入
+工作目录，逐个编译源文件，再统一链接为 WASI 程序。
+
+当前仍是轻量工作区：尚未接入 Android Storage Access Framework、真实磁盘项目、
+增量编译、CMake、clangd 或 Git 操作。默认项目包含 `main.c`、`math.c` 和
+`math.h`，用于验证多文件编译链路。
+
 ## 平板适配要点（`doge-ide.html`）
 
 - viewport 锁定缩放，`viewport-fit=cover` + `interactive-widget=resizes-content`；

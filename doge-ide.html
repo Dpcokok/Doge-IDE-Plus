@@ -50,6 +50,12 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 
 /* Main layout */
 .main{display:flex;flex:1;overflow:hidden}
+.project-panel{width:190px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.project-head{display:flex;align-items:center;justify-content:space-between;padding:9px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--fg2);font-weight:600}
+.project-actions{display:flex;gap:4px}.project-actions button{width:26px;height:26px;padding:0;background:var(--bg3);color:var(--fg2);border:1px solid var(--border);border-radius:4px;cursor:pointer}
+.project-actions button:hover{color:var(--accent);border-color:var(--accent)}
+.project-list{flex:1;overflow:auto;padding:5px}.project-file{display:flex;align-items:center;gap:7px;width:100%;padding:8px 7px;background:transparent;border:0;color:var(--fg2);text-align:left;border-radius:4px;cursor:pointer;font:12px var(--font-sans)}
+.project-file:hover{background:var(--bg3)}.project-file.active{background:var(--bg4);color:var(--accent)}.project-file .file-dot{width:7px;height:7px;border-radius:50%;background:var(--fg3);flex-shrink:0}.project-file.active .file-dot{background:var(--accent)}
 
 /* Editor panel */
 .editor-panel{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border)}
@@ -288,7 +294,7 @@ body.kb-open .stdin-section{border-top:none}
 
 /* 窄窗口（分屏 / 竖屏）：编辑器与输出上下堆叠 */
 @media (max-width:900px){
-  .main{flex-direction:column}
+   .main{flex-direction:column}.project-panel{width:auto;height:128px;border-right:none;border-bottom:1px solid var(--border)}.project-list{display:flex;gap:4px}.project-file{width:auto;min-width:120px}
   .editor-panel{border-right:none;border-bottom:1px solid var(--border)}
   .output-panel{width:auto!important;min-width:0;height:42%;flex-shrink:0}
   .resize-handle{display:none}
@@ -325,6 +331,10 @@ body.kb-open .stdin-section{border-top:none}
 
 <!-- Main -->
 <div class="main">
+  <aside class="project-panel">
+    <div class="project-head"><span>Project</span><span class="project-actions"><button onclick="newProjectFile()" title="New file">+</button><button onclick="deleteProjectFile()" title="Delete file">−</button></span></div>
+    <div class="project-list" id="projectList"></div>
+  </aside>
   <!-- Editor -->
   <div class="editor-panel" id="editorPanel">
     <div class="tabs">
@@ -465,6 +475,8 @@ int main() {
 let currentLang = 'c';
 let editor;
 let isRunning = false;
+let project = { name: 'Untitled Project', files: [] };
+let currentFilePath = 'main.c';
 let outputData = { stdout:'', stderr:'', info:'' };
 let currentOutputTab = 'stdout';
 let breakpoints = {};
@@ -1081,6 +1093,8 @@ function scheduleLint() {
 function init() {
   applyCodeSize();
   initTabletUX();
+  loadProject();
+  renderProjectFiles();
   buildTabs();
   initEditor();
   loadSavedState();
@@ -1104,7 +1118,8 @@ function buildTabs() {
 }
 
 function initEditor() {
-  const lang = getLang(currentLang);
+  const lang = languageForPath(currentFilePath);
+  currentLang = lang.id;
   loadBreakpoints();
   editor = CodeMirror.fromTextArea(document.getElementById('codeEditor'), {
     mode: lang.mode,
@@ -1134,9 +1149,11 @@ function initEditor() {
       }
     }
   });
-  editor.setValue(getSavedCode(currentLang) || lang.sample);
+  editor.setValue(getProjectFile(currentFilePath).code || lang.sample);
   editor.on('change', () => {
-    saveCode(currentLang, editor.getValue());
+    const file = getProjectFile(currentFilePath);
+    if (file) file.code = editor.getValue();
+    saveProject();
     scheduleLint();
     scheduleBpSave();
   });
@@ -1155,19 +1172,98 @@ function getLang(id) {
 
 function switchLang(id) {
   if (isRunning || id === currentLang) return;
-  saveCode(currentLang, editor.getValue());
+  saveCurrentFile();
   persistBreakpointsFromMarkers();
   currentLang = id;
   const lang = getLang(id);
   editor.setOption('mode', lang.mode);
-  const saved = getSavedCode(id);
-  editor.setValue(saved || lang.sample);
+  const extension = id === 'cpp' ? 'cpp' : 'c';
+  const nextPath = currentFilePath.replace(/\.(c|cc|cpp|cxx)$/i, '.' + extension);
+  if (!getProjectFile(nextPath)) project.files.push({ path: nextPath, code: lang.sample });
+  switchProjectFile(nextPath);
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.lang === id));
   updateLangInfo();
   renderBreakpoints();
   clearDebugPanel();
   if (currentOutputTab === 'debug') switchOutputTab('stdout');
   scheduleLint();
+}
+
+function languageForPath(path) {
+  return /\.(cc|cpp|cxx)$/i.test(path) ? getLang('cpp') : getLang('c');
+}
+function getProjectFile(path) { return project.files.find(file => file.path === path); }
+function saveCurrentFile() {
+  const file = getProjectFile(currentFilePath);
+  if (file && editor) file.code = editor.getValue();
+  saveProject();
+}
+function projectStorageKey() { return 'doge-ide-project-v1'; }
+function loadProject() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(projectStorageKey()) || 'null');
+    if (saved && Array.isArray(saved.files) && saved.files.length) project = saved;
+  } catch (e) {}
+  if (!project.files.length) project.files = [
+    { path: 'main.c', code: getLang('c').sample },
+    { path: 'math.c', code: '#include "math.h"\n\nint add_numbers(int a, int b) { return a + b; }\n' },
+    { path: 'math.h', code: '#pragma once\nint add_numbers(int a, int b);\n' }
+  ];
+  if (!getProjectFile(currentFilePath)) currentFilePath = project.files[0].path;
+}
+function saveProject() {
+  try { localStorage.setItem(projectStorageKey(), JSON.stringify(project)); } catch (e) {}
+  renderProjectFiles();
+}
+function renderProjectFiles() {
+  const list = document.getElementById('projectList');
+  if (!list) return;
+  list.innerHTML = '';
+  project.files.forEach(file => {
+    const button = document.createElement('button');
+    button.className = 'project-file' + (file.path === currentFilePath ? ' active' : '');
+    button.innerHTML = `<span class="file-dot"></span><span>${escapeHtml(file.path)}</span>`;
+    button.onclick = () => switchProjectFile(file.path);
+    list.appendChild(button);
+  });
+}
+function switchProjectFile(path) {
+  if (isRunning || (path === currentFilePath && editor)) return;
+  saveCurrentFile();
+  const file = getProjectFile(path);
+  if (!file) return;
+  currentFilePath = path;
+  const lang = languageForPath(path);
+  currentLang = lang.id;
+  if (editor) {
+    editor.setOption('mode', lang.mode);
+    editor.setValue(file.code || '');
+    renderBreakpoints();
+    scheduleLint();
+  }
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.lang === currentLang));
+  updateLangInfo();
+  renderProjectFiles();
+}
+function newProjectFile() {
+  const path = prompt('New C/C++ file path', 'util.c');
+  if (!path || !/^[A-Za-z0-9._/-]+\.(c|cc|cpp|cxx)$/i.test(path) || path.includes('..') || path.startsWith('/')) {
+    if (path) showToast('文件名必须是安全的 C/C++ 路径', 'error');
+    return;
+  }
+  if (getProjectFile(path)) { showToast('文件已存在', 'error'); return; }
+  project.files.push({ path, code: '' });
+  saveProject();
+  switchProjectFile(path);
+}
+function deleteProjectFile() {
+  if (project.files.length <= 1) { showToast('项目至少需要一个文件', 'info'); return; }
+  saveCurrentFile();
+  const index = project.files.findIndex(file => file.path === currentFilePath);
+  project.files.splice(index, 1);
+  currentFilePath = project.files[Math.max(0, index - 1)].path;
+  saveProject();
+  switchProjectFile(currentFilePath);
 }
 
 function updateLangInfo() {
@@ -1571,6 +1667,8 @@ async function runCode() {
 
   const body = {
     language: lang.apiLang,
+    entry: currentFilePath,
+    files: project.files.map(file => ({ path: file.path, code: file.code })),
     code: code,
     stdin: stdin || undefined,
     timeout_ms: getSetting('timeout', 30000),

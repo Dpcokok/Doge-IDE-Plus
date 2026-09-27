@@ -2,6 +2,7 @@ package com.doge.ide;
 
 import android.content.Context;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -12,7 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.concurrent.TimeUnit;
 
-/** Compiles one C/C++ source file to a WASI module using the imported toolchain. */
+/** Compiles a small local C/C++ project to a WASI module. */
 final class LocalCompiler {
     private static final long MAX_OUTPUT = 2L * 1024L * 1024L;
     private final File filesDir;
@@ -25,7 +26,13 @@ final class LocalCompiler {
         try {
             JSONObject request = new JSONObject(requestJson);
             String language = request.optString("language", "");
-            String code = request.optString("code", "");
+            JSONArray files = request.optJSONArray("files");
+            if (files == null) {
+                files = new JSONArray();
+                files.put(new JSONObject().put("path", "main." + ("cpp".equals(language) ? "cpp" : "c"))
+                        .put("code", request.optString("code", "")));
+            }
+            String entry = request.optString("entry", "main." + ("cpp".equals(language) ? "cpp" : "c"));
             String stdin = request.optString("stdin", "");
             int timeout = Math.max(1000, Math.min(30000, request.optInt("timeout_ms", 30000)));
             if (!"c".equals(language) && !"cpp".equals(language)) {
@@ -48,72 +55,102 @@ final class LocalCompiler {
             }
             File work = new File(filesDir, "runs");
             if (!work.isDirectory() && !work.mkdirs()) return error("runtime_error", "无法创建编译目录");
-            File source = new File(work, "main." + ("cpp".equals(language) ? "cpp" : "c"));
-            File object = new File(work, "main.o");
             File wasm = new File(work, "main.wasm");
-            Files.write(source.toPath(), code.getBytes(StandardCharsets.UTF_8));
-            Files.deleteIfExists(object.toPath());
             Files.deleteIfExists(wasm.toPath());
 
             String target = "wasm32-wasip1";
-            File clangExecutable = new File(toolchain, "bin/" + ("cpp".equals(language) ? "clang++" : "clang"));
-            ProcessBuilder compiler = new ProcessBuilder(
-                    clangExecutable.getAbsolutePath(), "--target=" + target, "--sysroot=" + sysroot.getAbsolutePath(),
-                    "-O2", "-std=" + ("cpp".equals(language) ? "c++20" : "c17"),
-                    "-fno-exceptions", "-fno-rtti", "-c", source.getAbsolutePath(), "-o", object.getAbsolutePath());
-            compiler.directory(work);
-            compiler.environment().put("HOME", filesDir.getAbsolutePath());
-            compiler.environment().put("TMPDIR", work.getAbsolutePath());
-            compiler.environment().put("PATH", new File(toolchain, "bin").getAbsolutePath());
-            compiler.environment().put("LD_LIBRARY_PATH", new File(toolchain, "lib").getAbsolutePath());
-            compiler.environment().put("PWD", work.getAbsolutePath());
-            compiler.environment().put("LLVM_CONFIG_FILE", new File(toolchain, "lib/llvm-config").getAbsolutePath());
-            Process process = compiler.redirectErrorStream(false).start();
-            ByteArrayOutputStream stdout = new ByteArrayOutputStream();
-            ByteArrayOutputStream stderr = new ByteArrayOutputStream();
-            Thread outReader = drain(process.getInputStream(), stdout);
-            Thread errReader = drain(process.getErrorStream(), stderr);
-            boolean finished = process.waitFor(timeout, TimeUnit.MILLISECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                outReader.join(1000); errReader.join(1000);
-                return result("timeout", "", stderr.toString(StandardCharsets.UTF_8), -1);
+            StringBuilder compileError = new StringBuilder();
+            java.util.ArrayList<File> objects = new java.util.ArrayList<>();
+            String effectiveLanguage = language;
+            boolean entryFound = false;
+            for (int i = 0; i < files.length(); i++) {
+                JSONObject file = files.optJSONObject(i);
+                if (file == null) continue;
+                String relative = file.optString("path", "").replace('\\', '/');
+                if (!relative.matches("[A-Za-z0-9._/-]+") || relative.startsWith("/") || relative.contains("..")) {
+                    return error("invalid_request", "项目文件路径无效: " + relative);
+                }
+                String lower = relative.toLowerCase(java.util.Locale.ROOT);
+                if (relative.equals(entry)) entryFound = true;
+                File projectFile = safeChild(work, relative);
+                File projectParent = projectFile.getParentFile();
+                if (projectParent != null) projectParent.mkdirs();
+                Files.write(projectFile.toPath(), file.optString("code", "").getBytes(StandardCharsets.UTF_8));
+                if (!lower.endsWith(".c") && !lower.endsWith(".cc") && !lower.endsWith(".cpp") && !lower.endsWith(".cxx")) continue;
+                if (lower.endsWith(".cc") || lower.endsWith(".cpp") || lower.endsWith(".cxx")) effectiveLanguage = "cpp";
+                File source = projectFile;
+                File object = new File(work, relative + ".o");
+                File objectParent = object.getParentFile();
+                if (objectParent != null) objectParent.mkdirs();
+                Files.deleteIfExists(object.toPath());
+                File compilerFile = new File(toolchain, "bin/" + (lower.endsWith(".c") ? "clang" : "clang++"));
+                ProcessBuilder compiler = new ProcessBuilder(
+                        compilerFile.getAbsolutePath(), "--target=" + target, "--sysroot=" + sysroot.getAbsolutePath(),
+                        "-O2", "-std=" + (lower.endsWith(".c") ? "c17" : "c++20"),
+                        "-fno-exceptions", "-fno-rtti", "-c", source.getAbsolutePath(), "-o", object.getAbsolutePath());
+                configureEnvironment(compiler, toolchain, work);
+                ProcessResult compiled = runProcess(compiler, timeout);
+                if (!compiled.finished) return result("timeout", "", compiled.stderr, -1);
+                compileError.append(compiled.stderr);
+                if (compiled.exitCode != 0 || !object.isFile()) return result("compile_error", "", compileError.toString(), compiled.exitCode);
+                objects.add(object);
             }
-            outReader.join(1000); errReader.join(1000);
-            String compileError = stderr.toString(StandardCharsets.UTF_8);
-            if (process.exitValue() != 0 || !object.isFile()) return result("compile_error", "", compileError, process.exitValue());
+            if (objects.isEmpty()) return error("invalid_request", "项目中没有 C/C++ 源文件");
+            if (!entryFound) return error("invalid_request", "入口文件不存在: " + entry);
+
             File linker = new File(toolchain, "bin/wasm-ld");
             File wasiLib = new File(sysroot, "lib/wasm32-wasip1");
             File crt = new File(wasiLib, "crt1-command.o");
             File builtins = new File(toolchain, "lib/clang/21/lib/wasm32-wasip1/libclang_rt.builtins.a");
-            ProcessBuilder link;
-            if ("cpp".equals(language)) {
-                link = new ProcessBuilder(linker.getAbsolutePath(), "--entry=_start", object.getAbsolutePath(), crt.getAbsolutePath(),
-                        "-L" + wasiLib.getAbsolutePath(), "-lc++", "-lc++abi", "-lc", builtins.getAbsolutePath(), "-o", wasm.getAbsolutePath());
+            java.util.ArrayList<String> linkArgs = new java.util.ArrayList<>();
+            linkArgs.add(linker.getAbsolutePath()); linkArgs.add("--entry=_start");
+            for (File object : objects) linkArgs.add(object.getAbsolutePath());
+            linkArgs.add(crt.getAbsolutePath()); linkArgs.add("-L" + wasiLib.getAbsolutePath());
+            if ("cpp".equals(effectiveLanguage)) {
+                linkArgs.add("-lc++"); linkArgs.add("-lc++abi"); linkArgs.add("-lc"); linkArgs.add(builtins.getAbsolutePath()); linkArgs.add("-o"); linkArgs.add(wasm.getAbsolutePath());
             } else {
-                link = new ProcessBuilder(linker.getAbsolutePath(), "--entry=_start", object.getAbsolutePath(), crt.getAbsolutePath(),
-                        "-L" + wasiLib.getAbsolutePath(), "-lc", builtins.getAbsolutePath(), "-o", wasm.getAbsolutePath());
+                linkArgs.add("-lc"); linkArgs.add(builtins.getAbsolutePath()); linkArgs.add("-o"); linkArgs.add(wasm.getAbsolutePath());
             }
-            link.directory(work);
-            link.environment().put("LD_LIBRARY_PATH", new File(toolchain, "lib").getAbsolutePath());
-            link.environment().put("HOME", filesDir.getAbsolutePath());
-            link.environment().put("TMPDIR", work.getAbsolutePath());
-            link.environment().put("PWD", work.getAbsolutePath());
-            Process linkProcess = link.redirectErrorStream(false).start();
-            ByteArrayOutputStream linkError = new ByteArrayOutputStream();
-            Thread linkReader = drain(linkProcess.getErrorStream(), linkError);
-            boolean linkFinished = linkProcess.waitFor(timeout, TimeUnit.MILLISECONDS);
-            if (!linkFinished) { linkProcess.destroyForcibly(); return result("timeout", "", "链接超时", -1); }
-            linkReader.join(1000);
-            compileError += linkError.toString(StandardCharsets.UTF_8);
-            if (linkProcess.exitValue() != 0 || !wasm.isFile()) return result("compile_error", "", compileError, linkProcess.exitValue());
+            ProcessBuilder link = new ProcessBuilder(linkArgs);
+            configureEnvironment(link, toolchain, work);
+            ProcessResult linked = runProcess(link, timeout);
+            if (!linked.finished) return result("timeout", "", "链接超时", -1);
+            compileError.append(linked.stderr);
+            if (linked.exitCode != 0 || !wasm.isFile()) return result("compile_error", "", compileError.toString(), linked.exitCode);
             String run = NativeWasmRunner.run(Files.readAllBytes(wasm.toPath()), stdin.getBytes(StandardCharsets.UTF_8), timeout);
             JSONObject response = new JSONObject(run);
-            response.put("compile_stderr", compileError);
+            response.put("compile_stderr", compileError.toString());
             return response.toString();
         } catch (Exception e) {
             return error("runtime_error", e.toString());
         }
+    }
+
+    private void configureEnvironment(ProcessBuilder process, File toolchain, File work) {
+        process.directory(work);
+        process.environment().put("HOME", filesDir.getAbsolutePath());
+        process.environment().put("TMPDIR", work.getAbsolutePath());
+        process.environment().put("PATH", new File(toolchain, "bin").getAbsolutePath());
+        process.environment().put("LD_LIBRARY_PATH", new File(toolchain, "lib").getAbsolutePath());
+        process.environment().put("PWD", work.getAbsolutePath());
+        process.environment().put("LLVM_CONFIG_FILE", new File(toolchain, "lib/llvm-config").getAbsolutePath());
+    }
+
+    private static ProcessResult runProcess(ProcessBuilder builder, int timeout) throws Exception {
+        Process process = builder.redirectErrorStream(false).start();
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
+        Thread outReader = drain(process.getInputStream(), stdout);
+        Thread errReader = drain(process.getErrorStream(), stderr);
+        boolean finished = process.waitFor(timeout, TimeUnit.MILLISECONDS);
+        if (!finished) process.destroyForcibly();
+        outReader.join(1000); errReader.join(1000);
+        return new ProcessResult(finished, finished ? process.exitValue() : -1, stderr.toString(StandardCharsets.UTF_8));
+    }
+
+    private static final class ProcessResult {
+        final boolean finished; final int exitCode; final String stderr;
+        ProcessResult(boolean finished, int exitCode, String stderr) { this.finished = finished; this.exitCode = exitCode; this.stderr = stderr; }
     }
 
     private static File safeChild(File root, String relative) throws IOException {
