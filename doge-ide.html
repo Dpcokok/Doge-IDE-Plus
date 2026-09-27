@@ -1182,12 +1182,11 @@ function switchLang(id) {
   if (isRunning || id === currentLang) return;
   saveCurrentFile();
   persistBreakpointsFromMarkers();
-  currentLang = id;
   const lang = getLang(id);
-  editor.setOption('mode', lang.mode);
   const extension = id === 'cpp' ? 'cpp' : 'c';
   const nextPath = currentFilePath.replace(/\.(c|cc|cpp|cxx)$/i, '.' + extension);
   if (!getProjectFile(nextPath)) project.files.push({ path: nextPath, code: lang.sample });
+  currentLang = id;
   switchProjectFile(nextPath);
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.lang === id));
   updateLangInfo();
@@ -1206,6 +1205,12 @@ function saveCurrentFile() {
   if (file && editor) file.code = editor.getValue();
   saveProject();
 }
+function syncCurrentFile() {
+  const file = getProjectFile(currentFilePath);
+  if (!file || !editor) return;
+  file.code = editor.getValue();
+  saveProject();
+}
 function projectStorageKey() { return 'doge-ide-project-v1'; }
 function loadProject() {
   try {
@@ -1217,6 +1222,9 @@ function loadProject() {
     { path: 'math.c', code: '#include "math.h"\n\nint add_numbers(int a, int b) { return a + b; }\n' },
     { path: 'math.h', code: '#pragma once\nint add_numbers(int a, int b);\n' }
   ];
+  if (!getProjectFile(currentFilePath)) currentFilePath = project.files[0].path;
+  const unique = new Map();
+  project.files = project.files.filter(file => file && typeof file.path === 'string' && file.path && !unique.has(file.path) && unique.set(file.path, true));
   if (!getProjectFile(currentFilePath)) currentFilePath = project.files[0].path;
 }
 function saveProject() {
@@ -1326,8 +1334,10 @@ function switchProjectFile(path) {
   const lang = languageForPath(path);
   currentLang = lang.id;
   if (editor) {
-    editor.setOption('mode', lang.mode);
-    editor.setValue(file.code || '');
+    editor.operation(() => {
+      editor.setOption('mode', lang.mode);
+      editor.setValue(file.code || lang.sample);
+    });
     renderBreakpoints();
     scheduleLint();
   }
@@ -1729,7 +1739,10 @@ function renderDebugPanel() {
 // Run
 async function runCode() {
   if (isRunning) return;
-  const lang = getLang(currentLang);
+  syncCurrentFile();
+  const lang = languageForPath(currentFilePath);
+  currentLang = lang.id;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.lang === currentLang));
   const code = editor.getValue();
   const stdin = document.getElementById('stdinInput').value;
 
