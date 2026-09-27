@@ -472,7 +472,7 @@ public class MainActivity extends Activity {
                 File sysroot = new File(staging, meta.optString("sysroot", "wasi-sysroot"));
                 if (!clang.isFile() || !sysroot.isDirectory()) throw new IOException("资源包缺少 Clang 或 WASI sysroot");
                 if (!clang.setExecutable(true, false)) throw new IOException("无法启用 Clang 执行权限");
-                for (String executable : new String[]{"clang++", "clang-21", "clang++-21", "wasm-ld", "ld.lld"}) {
+                for (String executable : new String[]{"clang++", "clang-21", "clang++-21", "clangd", "wasm-ld", "ld.lld"}) {
                     File file = new File(staging, "bin/" + executable);
                     if (file.isFile() && !file.setExecutable(true, false)) throw new IOException("无法启用工具执行权限: " + executable);
                 }

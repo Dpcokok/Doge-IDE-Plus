@@ -58,10 +58,11 @@ final class LocalCompiler {
             File clang = safeChild(toolchain, clangRelative);
             File sysroot = safeChild(toolchain, sysrootRelative);
             if (!clang.isFile() || !sysroot.isDirectory()) return error("runtime_not_ready", "资源包缺少 Clang 或 WASI sysroot");
-            for (String executable : new String[]{"clang", "clang++", "clang-21", "clang++-21", "wasm-ld", "ld.lld"}) {
+            for (String executable : new String[]{"clang", "clang++", "clang-21", "clang++-21", "clangd", "wasm-ld", "ld.lld"}) {
                 File candidate = new File(toolchain, "bin/" + executable);
                 if (candidate.isFile()) candidate.setExecutable(true, false);
             }
+            writeCompileCommands(request, files, build, toolchain, sysroot);
             File work = new File(new File(filesDir, "runs"), Long.toHexString(System.nanoTime()) + "-" + Thread.currentThread().getId());
             if (!work.isDirectory() && !work.mkdirs()) return error("runtime_error", "无法创建编译目录");
             File wasm = new File(work, "main.wasm");
@@ -135,6 +136,31 @@ final class LocalCompiler {
         } catch (Exception e) {
             return error("runtime_error", e.toString());
         }
+    }
+
+    private void writeCompileCommands(JSONObject request, JSONArray files, JSONObject build, File toolchain, File sysroot) {
+        try {
+            File root = new File(filesDir, "workspace/current");
+            if (!root.isDirectory()) root.mkdirs();
+            JSONArray commands = new JSONArray();
+            for (int i = 0; i < files.length(); i++) {
+                JSONObject file = files.optJSONObject(i); if (file == null) continue;
+                String path = file.optString("path", "").replace('\\', '/');
+                String lower = path.toLowerCase(java.util.Locale.ROOT);
+                if (!(lower.endsWith(".c") || lower.endsWith(".cc") || lower.endsWith(".cpp") || lower.endsWith(".cxx"))) continue;
+                File source = safeChild(root, path); File parent = source.getParentFile(); if (parent != null) parent.mkdirs();
+                Files.write(source.toPath(), file.optString("code", "").getBytes(StandardCharsets.UTF_8));
+                JSONArray args = new JSONArray().put(new File(toolchain, "bin/" + (lower.endsWith(".c") ? "clang" : "clang++")).getAbsolutePath())
+                        .put("--target=wasm32-wasip1").put("--sysroot=" + sysroot.getAbsolutePath()).put("-O" + (build == null ? "2" : build.optString("optimization", "2")))
+                        .put("-std=" + (lower.endsWith(".c") ? "c17" : "c++20")).put("-fno-exceptions").put("-fno-rtti").put("-c").put(source.getAbsolutePath());
+                JSONArray defines = build == null ? null : build.optJSONArray("defines");
+                if (defines != null) for (int d = 0; d < defines.length(); d++) args.put("-D" + defines.optString(d));
+                JSONArray includes = build == null ? null : build.optJSONArray("include_paths");
+                if (includes != null) for (int p = 0; p < includes.length(); p++) args.put("-I" + new File(root, includes.optString(p)).getAbsolutePath());
+                commands.put(new JSONObject().put("directory", root.getAbsolutePath()).put("file", source.getAbsolutePath()).put("arguments", args));
+            }
+            Files.write(new File(root, "compile_commands.json").toPath(), commands.toString(2).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) { }
     }
 
     private static void applyBuildOptions(ProcessBuilder process, JSONObject build, File work, File sysroot) {
