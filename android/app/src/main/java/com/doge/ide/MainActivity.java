@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
@@ -22,14 +23,25 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.JavascriptInterface;
 import android.widget.Toast;
+import android.provider.DocumentsContract;
+import android.provider.OpenableColumns;
+import android.database.Cursor;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.Reader;
+import java.io.InputStreamReader;
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 /**
  * Doge IDE 平板壳：一个全屏横屏的 WebView，内容由进程内 {@link LocalServer} 提供。
@@ -42,6 +54,8 @@ public class MainActivity extends Activity {
     private static final int BG = Color.parseColor("#1A1B26");
     private static final long BACK_GRACE_MS = 1200L;
     private static final int PICK_TOOLCHAIN = 42;
+    private static final int PICK_PROJECT = 43;
+    private static final int MAX_PROJECT_FILE = 2 * 1024 * 1024;
 
     private WebView web;
     private LocalServer server;
@@ -110,11 +124,60 @@ public class MainActivity extends Activity {
         public boolean isToolchainReady() {
             return new File(getFilesDir(), "toolchain/manifest.json").isFile();
         }
+
+        @JavascriptInterface
+        public boolean hasProjectWorkspace() {
+            return getPreferences(MODE_PRIVATE).contains("project_tree_uri");
+        }
+
+        @JavascriptInterface
+        public void openProject() {
+            runOnUiThread(() -> {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                startActivityForResult(intent, PICK_PROJECT);
+            });
+        }
+
+        @JavascriptInterface
+        public boolean saveProject(String json) {
+            try {
+                Uri tree = projectTreeUri();
+                if (tree == null) return false;
+                writeProject(tree, new JSONObject(json));
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "project save failed", e);
+                return false;
+            }
+        }
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_PROJECT) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+            Uri uri = data.getData();
+            try {
+                int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                getContentResolver().takePersistableUriPermission(uri, flags);
+            } catch (Exception e) {
+                Log.w(TAG, "could not persist project permission", e);
+            }
+            new Thread(() -> {
+                try {
+                    JSONObject project = readProject(uri);
+                    getPreferences(MODE_PRIVATE).edit().putString("project_tree_uri", uri.toString()).apply();
+                    runOnUiThread(() -> web.evaluateJavascript("window.projectOpened && window.projectOpened(" + JSONObject.quote(project.toString()) + ")", null));
+                } catch (Exception e) {
+                    Log.e(TAG, "project open failed", e);
+                    notifyProjectError(e.getMessage());
+                }
+            }, "doge-project-open").start();
+            return;
+        }
         if (requestCode != PICK_TOOLCHAIN || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         new Thread(() -> {
@@ -128,6 +191,119 @@ public class MainActivity extends Activity {
             }
         }, "doge-toolchain-import").start();
     }
+
+    private Uri projectTreeUri() {
+        String value = getPreferences(MODE_PRIVATE).getString("project_tree_uri", null);
+        return value == null ? null : Uri.parse(value);
+    }
+
+    private JSONObject readProject(Uri tree) throws Exception {
+        JSONObject project = new JSONObject();
+        project.put("name", queryDisplayName(tree));
+        JSONArray files = new JSONArray();
+        readDirectory(tree, DocumentsContract.getTreeDocumentId(tree), "", files);
+        project.put("files", files);
+        if (files.length() == 0) throw new IOException("项目目录中没有 C/C++ 文件");
+        return project;
+    }
+
+    private void readDirectory(Uri tree, String documentId, String prefix, JSONArray files) throws Exception {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId);
+        String[] projection = {DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE};
+        try (Cursor cursor = getContentResolver().query(children, projection, null, null, null)) {
+            if (cursor == null) return;
+            while (cursor.moveToNext()) {
+                String id = cursor.getString(0);
+                String name = cursor.getString(1);
+                String mime = cursor.getString(2);
+                if (!isSafeName(name)) continue;
+                String path = prefix.isEmpty() ? name : prefix + "/" + name;
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    readDirectory(tree, id, path, files);
+                } else if (isSourceFile(name)) {
+                    Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
+                    String code = readText(fileUri);
+                    files.put(new JSONObject().put("path", path).put("code", code));
+                }
+            }
+        }
+    }
+
+    private String readText(Uri uri) throws IOException {
+        try (InputStream input = getContentResolver().openInputStream(uri);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            if (input == null) throw new IOException("无法读取项目文件");
+            byte[] buffer = new byte[8192]; int total = 0; int n;
+            while ((n = input.read(buffer)) >= 0) {
+                if (n == 0) continue;
+                total += n; if (total > MAX_PROJECT_FILE) throw new IOException("项目文件过大: " + uri);
+                output.write(buffer, 0, n);
+            }
+            return output.toString(StandardCharsets.UTF_8.name());
+        }
+    }
+
+    private void writeProject(Uri tree, JSONObject project) throws Exception {
+        JSONArray files = project.optJSONArray("files");
+        if (files == null) throw new IOException("项目文件列表无效");
+        String rootId = DocumentsContract.getTreeDocumentId(tree);
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject file = files.optJSONObject(i); if (file == null) continue;
+            String path = file.optString("path", "").replace('\\', '/');
+            if (!path.matches("[A-Za-z0-9._/-]+") || path.startsWith("/") || path.contains("..")) throw new IOException("文件路径无效: " + path);
+            String[] parts = path.split("/");
+            String parentId = rootId;
+            for (int p = 0; p < parts.length - 1; p++) parentId = findOrCreateDirectory(tree, parentId, parts[p]);
+            String name = parts[parts.length - 1];
+            String id = findChild(tree, parentId, name);
+            Uri target;
+            if (id == null) {
+                Uri created = DocumentsContract.createDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, parentId), "text/plain", name);
+                if (created == null) throw new IOException("无法创建项目文件: " + path);
+                target = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getDocumentId(created));
+            } else target = DocumentsContract.buildDocumentUriUsingTree(tree, id);
+            try (OutputStream output = getContentResolver().openOutputStream(target, "wt")) {
+                if (output == null) throw new IOException("无法写入项目文件: " + path);
+                byte[] data = file.optString("code", "").getBytes(StandardCharsets.UTF_8);
+                if (data.length > MAX_PROJECT_FILE) throw new IOException("项目文件过大: " + path);
+                output.write(data);
+            }
+        }
+    }
+
+    private String findOrCreateDirectory(Uri tree, String parentId, String name) throws IOException {
+        String existing = findChild(tree, parentId, name);
+        if (existing != null) return existing;
+        Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, parentId);
+        Uri created = DocumentsContract.createDocument(getContentResolver(), parent, DocumentsContract.Document.MIME_TYPE_DIR, name);
+        if (created == null) throw new IOException("无法创建目录: " + name);
+        return DocumentsContract.getDocumentId(created);
+    }
+
+    private String findChild(Uri tree, String parentId, String name) throws IOException {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId);
+        String[] projection = {DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME};
+        try (Cursor cursor = getContentResolver().query(children, projection, null, null, null)) {
+            if (cursor == null) return null;
+            while (cursor.moveToNext()) if (name.equals(cursor.getString(1))) return cursor.getString(0);
+        }
+        return null;
+    }
+
+    private String queryDisplayName(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            return cursor != null && cursor.moveToFirst() ? cursor.getString(0) : "Project";
+        } catch (Exception e) { return "Project"; }
+    }
+
+    private void notifyProjectError(String message) {
+        String safe = message == null ? "项目操作失败" : message;
+        runOnUiThread(() -> web.evaluateJavascript("window.projectError && window.projectError(" + JSONObject.quote(safe) + ")", null));
+    }
+
+    private static boolean isSafeName(String name) { return name != null && !name.isEmpty() && !".".equals(name) && !"..".equals(name) && !name.contains("/") && !name.contains("\\"); }
+    private static boolean isSourceFile(String name) { return name.matches("(?i).+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)"); }
 
     private void installToolchain(Uri uri) throws IOException {
         File root = new File(getFilesDir(), "toolchain");

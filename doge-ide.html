@@ -54,6 +54,7 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .project-head{display:flex;align-items:center;justify-content:space-between;padding:9px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--fg2);font-weight:600}
 .project-actions{display:flex;gap:4px}.project-actions button{width:26px;height:26px;padding:0;background:var(--bg3);color:var(--fg2);border:1px solid var(--border);border-radius:4px;cursor:pointer}
 .project-actions button:hover{color:var(--accent);border-color:var(--accent)}
+.project-actions button.wide{width:auto;padding:0 7px;font-size:11px}
 .project-list{flex:1;overflow:auto;padding:5px}.project-file{display:flex;align-items:center;gap:7px;width:100%;padding:8px 7px;background:transparent;border:0;color:var(--fg2);text-align:left;border-radius:4px;cursor:pointer;font:12px var(--font-sans)}
 .project-file:hover{background:var(--bg3)}.project-file.active{background:var(--bg4);color:var(--accent)}.project-file .file-dot{width:7px;height:7px;border-radius:50%;background:var(--fg3);flex-shrink:0}.project-file.active .file-dot{background:var(--accent)}
 
@@ -332,7 +333,7 @@ body.kb-open .stdin-section{border-top:none}
 <!-- Main -->
 <div class="main">
   <aside class="project-panel">
-    <div class="project-head"><span>Project</span><span class="project-actions"><button onclick="newProjectFile()" title="New file">+</button><button onclick="deleteProjectFile()" title="Delete file">−</button></span></div>
+    <div class="project-head"><span id="projectName">Project</span><span class="project-actions"><button class="wide" onclick="openProject()" title="Open project folder">Open</button><button class="wide" onclick="saveProjectToDisk()" title="Save project folder">Save</button><button onclick="newProjectFile()" title="New file">+</button><button onclick="deleteProjectFile()" title="Delete file">−</button></span></div>
     <div class="project-list" id="projectList"></div>
   </aside>
   <!-- Editor -->
@@ -1215,9 +1216,38 @@ function saveProject() {
   try { localStorage.setItem(projectStorageKey(), JSON.stringify(project)); } catch (e) {}
   renderProjectFiles();
 }
+function openProject() {
+  if (window.DogeNative && DogeNative.openProject) DogeNative.openProject();
+  else showToast('请在 Doge IDE+ APK 中打开项目目录', 'info');
+}
+function saveProjectToDisk() {
+  saveCurrentFile();
+  if (!(window.DogeNative && DogeNative.saveProject)) {
+    showToast('请在 Doge IDE+ APK 中保存项目目录', 'info');
+    return;
+  }
+  const ok = DogeNative.saveProject(JSON.stringify(project));
+  showToast(ok ? '项目已保存到目录' : '请先打开项目目录', ok ? 'success' : 'info');
+}
+window.projectOpened = function(serialized) {
+  try {
+    const loaded = typeof serialized === 'string' ? JSON.parse(serialized) : serialized;
+    if (!loaded || !Array.isArray(loaded.files) || !loaded.files.length) throw new Error('项目没有可编辑文件');
+    project = loaded;
+    const nextPath = project.files[0].path;
+    currentFilePath = '';
+    saveProject();
+    if (editor) switchProjectFile(nextPath);
+    document.getElementById('projectName').textContent = project.name || 'Project';
+    showToast('项目已打开', 'success');
+  } catch (e) { projectError(e.message); }
+};
+window.projectError = function(message) { showToast(message || '项目操作失败', 'error'); };
 function renderProjectFiles() {
   const list = document.getElementById('projectList');
   if (!list) return;
+  const title = document.getElementById('projectName');
+  if (title) title.textContent = project.name || 'Project';
   list.innerHTML = '';
   project.files.forEach(file => {
     const button = document.createElement('button');
