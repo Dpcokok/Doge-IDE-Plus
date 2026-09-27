@@ -339,7 +339,7 @@ body.kb-open .stdin-section{border-top:none}
 <!-- Main -->
 <div class="main">
   <aside class="project-panel">
-    <div class="project-head"><span id="projectName">Project</span><span class="project-actions"><button class="wide" onclick="openProject()" title="Open project folder">Open</button><button class="wide" onclick="saveProjectToDisk()" title="Save project folder">Save</button><button onclick="newProjectFile()" title="New file">+</button><button onclick="deleteProjectFile()" title="Delete file">−</button><button onclick="toggleProjectPanel()" title="Collapse project panel">‹</button></span></div>
+    <div class="project-head"><button class="project-name" id="projectName" onclick="renameProject()" title="Rename project">Project</button><span class="project-actions"><button class="wide" onclick="openProject()" title="Open project folder">Open</button><button class="wide" onclick="saveProjectToDisk()" title="Save project folder">Save</button><button onclick="newProjectFile()" title="New file">+</button><button onclick="deleteProjectFile()" title="Delete file">−</button><button onclick="toggleProjectPanel()" title="Collapse project panel">‹</button></span></div>
     <div class="project-list" id="projectList"></div>
   </aside>
   <div class="project-resize" id="projectResize" title="Resize project panel"></div>
@@ -1388,10 +1388,10 @@ function switchProjectFile(path) {
   renderProjectFiles();
 }
 function newProjectFile() {
-  dogeInput('新建文件', '输入 C/C++ 文件路径', 'main.c', (path) => {
+  dogeInput('新建文件', '输入文件名（不要输入目录路径）', 'main.c', (path) => {
     path = path.trim();
-    if (!/^[A-Za-z0-9._/-]+\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(path) || path.includes('..') || path.startsWith('/')) {
-      showToast('文件名必须是安全的 C/C++ 路径', 'error'); return;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(path) || path.includes('..')) {
+      showToast('请输入合法文件名，例如 main.cpp 或 config.h', 'error'); return;
     }
     if (getProjectFile(path)) { showToast('文件已存在', 'error'); return; }
     project.files.push({ path, code: '' });
