@@ -20,9 +20,11 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.doge.ide'
+        applicationId 'com.doge.ide.plus'
         minSdk 24
-        targetSdk 35
+        // Local toolchains are executed from the app files directory. Android's
+        // execute restriction for target 29+ blocks that workflow.
+        targetSdk 28
         versionCode 1
         versionName '1.0.0'
     }
@@ -53,6 +55,23 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets.main.jniLibs.srcDir('src/main/jniLibs')
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
+    defaultConfig {
+        externalNativeBuild {
+            cmake {
+                abiFilters 'arm64-v8a'
+            }
+        }
     }
 
     lint {

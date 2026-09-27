@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Doge IDE</string>
+    <string name="app_name">Doge IDE+</string>
     <string name="server_failed">内置服务启动失败：%1$s</string>
     <string name="press_back_again">再按一次返回键退出</string>
 </resources>

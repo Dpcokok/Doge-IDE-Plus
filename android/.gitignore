@@ -3,6 +3,7 @@
 .gradle-dist/
 build/
 app/build/
+app/.cxx/
 local.properties
 keystore.properties
 *.jks

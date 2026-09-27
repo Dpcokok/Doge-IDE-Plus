@@ -11,12 +11,10 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -29,23 +27,21 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 进程内迷你 HTTP 服务，等价于桌面版 main.go 的角色：
  * <ul>
  *   <li>把 APK assets 里的 web 应用喂给 WebView —— 同源，因此没有 CORS、localStorage 也稳定；</li>
- *   <li>把 POST /api/v1/execution/run 转发到云端沙盒（带上页面设置的 endpoint 与 API Key）。</li>
+ *   <li>为本地执行器保留 POST /api/v1/execution/run 接口。</li>
  * </ul>
  * 只监听 127.0.0.1，不对外暴露。
  */
 final class LocalServer implements Closeable {
 
     private static final String TAG = "DogeIDE";
-    private static final String DEFAULT_UPSTREAM = "https://uapis.cn/api/v1/execution/run";
     private static final String API_PATH = "/api/v1/execution/run";
     private static final int PREFERRED_PORT = 8787;
     private static final int MAX_BODY = 10 << 20;
     private static final int SOCKET_TIMEOUT_MS = 15000;
-    private static final int CONNECT_TIMEOUT_MS = 15000;
-    private static final int READ_TIMEOUT_MS = 35000;
     private static final int WORKERS = 8;
 
     private final AssetManager assets;
+    private final LocalCompiler compiler;
     private ServerSocket serverSocket;
     private ExecutorService workers;
     private volatile boolean running;
@@ -53,6 +49,7 @@ final class LocalServer implements Closeable {
 
     LocalServer(Context context) {
         this.assets = context.getApplicationContext().getAssets();
+        this.compiler = new LocalCompiler(context);
     }
 
     /** 启动服务，返回页面基地址（如 http://127.0.0.1:8787）。 */
@@ -168,9 +165,6 @@ final class LocalServer implements Closeable {
         String path = "/";
         boolean keepAlive = true;
         boolean chunked;
-        String contentType;
-        String authorization;
-        String upstream;
         byte[] body;
     }
 
@@ -210,12 +204,6 @@ final class LocalServer implements Closeable {
                 }
             } else if (key.equals("transfer-encoding")) {
                 req.chunked = value.toLowerCase(Locale.US).contains("chunked");
-            } else if (key.equals("content-type")) {
-                req.contentType = value;
-            } else if (key.equals("authorization")) {
-                req.authorization = value;
-            } else if (key.equals("x-doge-upstream")) {
-                req.upstream = value;
             } else if (key.equals("connection")) {
                 String v = value.toLowerCase(Locale.US);
                 if (v.contains("close")) {
@@ -334,7 +322,10 @@ final class LocalServer implements Closeable {
                 return sendBytes(out, req, 405, "text/plain; charset=utf-8",
                         "method not allowed".getBytes(StandardCharsets.UTF_8));
             }
-            return proxyRun(out, req);
+            String request = new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8);
+            String response = compiler.execute(request);
+            int status = response.contains("\"status\":\"runtime_not_ready\"") ? 503 : 200;
+            return sendBytes(out, req, status, "application/json; charset=utf-8", response.getBytes(StandardCharsets.UTF_8));
         }
         if (!"GET".equals(req.method) && !"HEAD".equals(req.method)) {
             return sendBytes(out, req, 405, "text/plain; charset=utf-8",
@@ -373,66 +364,6 @@ final class LocalServer implements Closeable {
             return null;
         }
         return name;
-    }
-
-    private boolean proxyRun(OutputStream out, Request req) throws IOException {
-        byte[] payload = req.body == null ? new byte[0] : req.body;
-        String target = safeUpstream(req.upstream);
-        HttpURLConnection conn = null;
-        try {
-            conn = (HttpURLConnection) new URL(target).openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
-            conn.setUseCaches(false);
-            conn.setDoOutput(true);
-            conn.setFixedLengthStreamingMode(payload.length);
-            conn.setRequestProperty("Content-Type",
-                    req.contentType != null ? req.contentType : "application/json");
-            if (req.authorization != null && !req.authorization.isEmpty()) {
-                conn.setRequestProperty("Authorization", req.authorization);
-            }
-            try (OutputStream upstreamOut = conn.getOutputStream()) {
-                upstreamOut.write(payload);
-            }
-            int status = conn.getResponseCode();
-            InputStream body = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
-            byte[] data = body != null ? readAll(body) : new byte[0];
-            String type = conn.getContentType();
-            return sendBytes(out, req, status,
-                    type != null ? type : "application/json; charset=utf-8", data);
-        } catch (Exception e) {
-            Log.w(TAG, "proxy failed: " + target, e);
-            String message = "{\"error\":\"Proxy error\",\"message\":" + jsonString(e.toString()) + "}";
-            return sendBytes(out, req, 502, "application/json; charset=utf-8",
-                    message.getBytes(StandardCharsets.UTF_8));
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
-        }
-    }
-
-    /** 页面可指定目标 endpoint（仅接受 http/https，避免被当成任意协议滥用）。 */
-    private static String safeUpstream(String candidate) {
-        if (candidate == null) {
-            return DEFAULT_UPSTREAM;
-        }
-        String value = candidate.trim();
-        if (value.isEmpty() || value.length() > 2048) {
-            return DEFAULT_UPSTREAM;
-        }
-        try {
-            URL url = new URL(value);
-            String protocol = url.getProtocol();
-            if (("http".equals(protocol) || "https".equals(protocol)) && url.getHost() != null
-                    && !url.getHost().isEmpty()) {
-                return value;
-            }
-        } catch (Exception ignored) {
-            // 落到默认地址
-        }
-        return DEFAULT_UPSTREAM;
     }
 
     // ---------------------------------------------------------------- 响应

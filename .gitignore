@@ -7,3 +7,6 @@ exe/*.exe
 .idea/
 .vscode/
 *.log
+
+# Release payloads are distributed outside normal source history.
+release/*/*.zip

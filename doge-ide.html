@@ -45,6 +45,7 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .debug-btn:hover{border-color:var(--purple);color:var(--purple);transform:translateY(-1px)}
 .debug-btn.running{background:var(--orange);color:#1a1b26;border-color:transparent;pointer-events:none}
 .debug-btn kbd{font-size:11px;opacity:.7;font-family:inherit}
+[hidden]{display:none!important}
 .hotkey-hint{font-size:12px;color:var(--fg3)}
 
 /* Main layout */
@@ -211,6 +212,8 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 /* Settings */
 .settings-btn{background:none;border:1px solid var(--border);color:var(--fg3);width:32px;height:32px;border-radius:var(--radius);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .15s}
 .settings-btn:hover{background:var(--bg3);color:var(--fg);border-color:var(--accent)}
+.toolchain-btn{background:var(--bg3);border:1px solid var(--border);color:var(--fg2);padding:6px 12px;border-radius:var(--radius);cursor:pointer;font-size:13px;transition:all .15s}
+.toolchain-btn:hover{color:var(--accent);border-color:var(--accent)}
 .settings-panel{position:absolute;top:48px;right:16px;background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:20px;width:340px;z-index:100;box-shadow:0 8px 32px var(--shadow);display:none}
 .settings-panel.show{display:block}
 .settings-panel h3{font-size:14px;margin-bottom:16px;color:var(--accent)}
@@ -302,9 +305,10 @@ body.kb-open .stdin-section{border-top:none}
 <div class="header">
   <div class="logo">
     <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" fill="#7aa2f7"/><text x="16" y="21" text-anchor="middle" fill="#1a1b26" font-size="16" font-weight="bold" font-family="sans-serif">D</text></svg>
-    <span>Doge IDE</span>
+    <span>Doge IDE+</span>
   </div>
   <div class="header-right">
+    <button class="toolchain-btn" onclick="pickToolchain()" title="导入本地 C/C++ 运行库">导入运行库</button>
     <button class="settings-btn" onclick="toggleSettings()" title="Settings">⚙</button>
     <span class="hotkey-hint">Ctrl+Enter 运行</span>
     <button class="run-btn" id="runBtn" onclick="runCode()">
@@ -312,7 +316,7 @@ body.kb-open .stdin-section{border-top:none}
       Run
       <kbd>Ctrl+↵</kbd>
     </button>
-    <button class="debug-btn" id="debugBtn" onclick="debugCode()" title="断点调试：先在行号左侧点击设置断点，再点 Debug">
+    <button class="debug-btn" id="debugBtn" onclick="debugCode()" title="断点调试：先在行号左侧点击设置断点，再点 Debug" hidden>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8h-2.81a5.99 5.99 0 0 0-1.82-2.29l1.32-1.32-1.41-1.41-1.83 1.83a6.03 6.03 0 0 0-2.45-.52c-.87 0-1.7.19-2.45.52L6.72 2.98 5.31 4.39 6.63 5.71A5.99 5.99 0 0 0 4.81 8H2v2h2.09a6.5 6.5 0 0 0 0 4H2v2h2.81a6 6 0 0 0 11.38 0H19v-2h-.09a6.5 6.5 0 0 0 0-4H19V8zM12 19a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg>
       Debug
     </button>
@@ -325,10 +329,6 @@ body.kb-open .stdin-section{border-top:none}
   <div class="editor-panel" id="editorPanel">
     <div class="tabs">
       <div id="langTabs" style="display:flex;gap:2px"></div>
-      <label class="packs-toggle" title="加载常用第三方库" style="margin-left:auto">
-        <input type="checkbox" id="packsCheck">
-        📦 常用库 (packs)
-      </label>
     </div>
     <div class="editor-wrap">
       <textarea id="codeEditor"></textarea>
@@ -358,7 +358,7 @@ body.kb-open .stdin-section{border-top:none}
       <div class="output-tab active" data-tab="stdout" onclick="switchOutputTab('stdout')">stdout</div>
       <div class="output-tab" data-tab="stderr" onclick="switchOutputTab('stderr')">stderr<span class="count" id="stderrCount" style="display:none">0</span></div>
       <div class="output-tab" data-tab="info" onclick="switchOutputTab('info')">info</div>
-      <div class="output-tab" data-tab="debug" onclick="switchOutputTab('debug')">debug<span class="count" id="debugCount" style="display:none">0</span></div>
+      <div class="output-tab" data-tab="debug" onclick="switchOutputTab('debug')" hidden>debug<span class="count" id="debugCount" style="display:none">0</span></div>
     </div>
     <div class="output-content stdout" id="outputContent">
       <span class="output-placeholder">点击 Run 或按 Ctrl+Enter 运行代码...</span>
@@ -368,27 +368,22 @@ body.kb-open .stdin-section{border-top:none}
 
 <!-- Footer -->
 <div class="footer">
-  <span>Powered by <a href="https://uapis.cn" target="_blank">UApiPro</a> · 云端沙盒执行</span>
-  <span id="footerLang">Python 3</span>
+  <span>Doge IDE+ · 本地 C/C++ 编程环境</span>
+  <span id="footerLang">C17</span>
 </div>
 
 <!-- Settings Panel -->
 <div class="settings-panel" id="settingsPanel">
   <h3>⚙ Settings</h3>
   <div class="settings-row">
-    <label>API Key (optional)</label>
-    <input type="password" id="apiKeyInput" placeholder="Enter your UApiPro API key...">
-    <div class="hint">Leave empty for visitor credits (limited). Get key at <a href="https://uapis.cn/console" target="_blank" style="color:var(--accent)">uapis.cn/console</a></div>
-  </div>
-  <div class="settings-row">
-    <label>API Endpoint</label>
-    <input type="text" id="apiEndpoint" value="https://uapis.cn/api/v1/execution/run">
-    <div class="hint">Default: https://uapis.cn/api/v1/execution/run</div>
-  </div>
-  <div class="settings-row">
     <label>Timeout (ms)</label>
     <input type="number" id="timeoutInput" value="30000" min="1000" max="30000" step="1000">
     <div class="hint">Max 30000ms (30 seconds)</div>
+  </div>
+  <div class="settings-row">
+    <label>本地 C/C++ 运行库</label>
+    <button type="button" onclick="pickToolchain()">导入资源包 (.zip)</button>
+    <div class="hint" id="toolchainHint">首次运行前导入 Android ARM64 C/C++ 资源包</div>
   </div>
   <div class="settings-row">
     <label>Editor font size (px)</label>
@@ -409,10 +404,9 @@ body.kb-open .stdin-section{border-top:none}
   <div class="modal">
     <h3>⌨️ Keyboard Shortcuts</h3>
     <div class="shortcut-row"><span>Run code</span><kbd>Ctrl + Enter</kbd></div>
-    <div class="shortcut-row"><span>Debug (breakpoints)</span><kbd>Ctrl + Shift + Enter</kbd></div>
     <div class="shortcut-row"><span>Save (local)</span><kbd>Ctrl + S</kbd></div>
     <div class="shortcut-row"><span>New file</span><kbd>Ctrl + N</kbd></div>
-    <div class="shortcut-row"><span>Switch language</span><kbd>Ctrl + 1~6</kbd></div>
+    <div class="shortcut-row"><span>Switch language</span><kbd>Ctrl + 1~2</kbd></div>
     <div class="shortcut-row"><span>Toggle stdin</span><kbd>Ctrl + I</kbd></div>
     <div class="shortcut-row"><span>Clear output</span><kbd>Ctrl + L</kbd></div>
     <div class="shortcut-row"><span>Toggle theme</span><kbd>Ctrl + D</kbd></div>
@@ -422,89 +416,12 @@ body.kb-open .stdin-section{border-top:none}
 
 <script src="web/codemirror/codemirror.min.js"></script>
 <script src="web/codemirror/addon/hint/show-hint.min.js"></script>
-<script src="web/codemirror/mode/python/python.min.js"></script>
-<script src="web/codemirror/mode/javascript/javascript.min.js"></script>
 <script src="web/codemirror/mode/clike/clike.min.js"></script>
-<script src="web/codemirror/mode/go/go.min.js"></script>
-<script src="web/codemirror/mode/xml/xml.min.js"></script>
-<script src="web/codemirror/mode/jsx/jsx.min.js"></script>
 <script src="web/codemirror/addon/edit/closebrackets.min.js"></script>
 <script src="web/codemirror/addon/edit/matchbrackets.min.js"></script>
 <script src="web/codemirror/addon/selection/active-line.min.js"></script>
 <script>
 const LANGUAGES = [
-  {
-    id:'python', name:'Python', mode:'python', version:'Python 3',
-    color:'#3572A5', apiLang:'python',
-    packs:['python-libs'],
-    sample:`# 🐍 Python - Doge IDE
-import sys
-
-def main():
-    name = input("What's your name? ")
-    print(f"Hello, {name}! Welcome to Doge IDE!")
-    print(f"Python version: {sys.version}")
-
-if __name__ == "__main__":
-    main()
-`
-  },
-  {
-    id:'javascript', name:'JavaScript', mode:'javascript', version:'Node.js',
-    color:'#f1e05a', apiLang:'javascript',
-    packs:['node-libs'],
-    sample:`// ⚡ JavaScript - Doge IDE
-const readline = require('readline');
-const rl = readline.createInterface({ input: process.stdin });
-
-rl.question("What's your name? ", (name) => {
-    console.log(\`Hello, \${name}! Welcome to Doge IDE!\`);
-    console.log(\`Node version: \${process.version}\`);
-    rl.close();
-});
-`
-  },
-  {
-    id:'typescript', name:'TypeScript', mode:{name:'javascript', typescript:true}, version:'TypeScript',
-    color:'#3178c6', apiLang:'typescript',
-    packs:['node-libs'],
-    sample:`// 🟦 TypeScript - Doge IDE
-interface Greeting {
-  name: string;
-  message: string;
-}
-
-const greet = (name: string): Greeting => ({
-  name,
-  message: \`Hello, \${name}! Welcome to Doge IDE!\`
-});
-
-const result: Greeting = greet("World");
-console.log(result.message);
-console.log(\`TypeScript: strong types, zero runtime cost.\`);
-`
-  },
-  {
-    id:'go', name:'Go', mode:'go', version:'Go',
-    color:'#00ADD8', apiLang:'go',
-    packs:['go-libs'],
-    sample:`// 🐹 Go - Doge IDE
-package main
-
-import (
-\t"fmt"
-\t"runtime"
-)
-
-func main() {
-\tfmt.Print("What's your name? ")
-\tvar name string
-\tfmt.Scanln(&name)
-\tfmt.Printf("Hello, %s! Welcome to Doge IDE!\\n", name)
-\tfmt.Printf("Go version: %s\\n", runtime.Version())
-}
-`
-  },
   {
     id:'c', name:'C', mode:'text/x-csrc', version:'C17',
     color:'#555555', apiLang:'c',
@@ -545,7 +462,7 @@ int main() {
   }
 ];
 
-let currentLang = 'python';
+let currentLang = 'c';
 let editor;
 let isRunning = false;
 let outputData = { stdout:'', stderr:'', info:'' };
@@ -1207,8 +1124,6 @@ function initEditor() {
     extraKeys: {
       'Ctrl-Enter': () => runCode(),
       'Cmd-Enter': () => runCode(),
-      'Shift-Ctrl-Enter': () => debugCode(),
-      'Shift-Cmd-Enter': () => debugCode(),
       'Ctrl-Space': 'autocomplete',
       'Tab': (cm) => {
         if (cm.somethingSelected()) {
@@ -1432,30 +1347,14 @@ function prepareDebugCode(lang, userCode, bpLines) {
 }
 
 async function requestExecution(body) {
-  const headers = { 'Content-Type': 'application/json' };
-  const apiKey = getSetting('apiKey', '');
-  if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
-  const apiEndpoint = getSetting('apiEndpoint', 'https://uapis.cn/api/v1/execution/run');
-  const isFile = location.protocol === 'file:';
-  const isLocalHost = !isFile && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
-  const proxyEndpoint = (isFile || !isLocalHost) ? 'http://localhost:8787/api/v1/execution/run' : '/api/v1/execution/run';
-  // 同源请求不会触发 CORS 预检，所以代理请求可以带上目标 endpoint（自定义 API 地址也能生效）。
-  const proxyHeaders = Object.assign({}, headers, { 'X-Doge-Upstream': apiEndpoint });
-  const doFetch = (url, h) => fetch(url, { method: 'POST', headers: h, body: JSON.stringify(body) });
   const t0 = Date.now();
-  // 由本地壳提供页面时（桌面版 / proxy.py / Android App），壳已经会带上 API Key 转发，直接走代理。
-  const first = isLocalHost ? proxyEndpoint : apiEndpoint;
   try {
-    const resp = await doFetch(first, isLocalHost ? proxyHeaders : headers);
-    return { data: await resp.json(), elapsed: Date.now() - t0, proxied: isLocalHost };
+    const resp = await fetch('/api/v1/execution/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    return { data: await resp.json(), elapsed: Date.now() - t0 };
   } catch (err) {
-    if (isLocalHost) return { error: err, proxyError: err };
-    try {
-      const resp = await doFetch(proxyEndpoint, proxyHeaders);
-      return { data: await resp.json(), elapsed: Date.now() - t0, proxied: true };
-    } catch (err2) {
-      return { error: err, proxyError: err2 };
-    }
+    return { error: err };
   }
 }
 
@@ -1514,8 +1413,6 @@ async function debugCode() {
     stdin: document.getElementById('stdinInput').value || undefined,
     timeout_ms: getSetting('timeout', 30000),
   };
-  const packsCheck = document.getElementById('packsCheck');
-  if (packsCheck && packsCheck.checked && lang.packs.length) body.packs = lang.packs;
 
   const res = await requestExecution(body);
   btn.classList.remove('running');
@@ -1669,7 +1566,7 @@ async function runCode() {
   const dot = document.getElementById('statusDot');
   dot.className = 'status-dot running';
 
-  outputData = { stdout:'', stderr:'', info:`[${lang.name}] Submitting...\n` };
+  outputData = { stdout:'', stderr:'', info:`[${lang.name}] 本地运行中...\n` };
   renderOutput();
 
   const body = {
@@ -1679,38 +1576,15 @@ async function runCode() {
     timeout_ms: getSetting('timeout', 30000),
   };
 
-  // Packs toggle
-  const packsCheck = document.getElementById('packsCheck');
-  if (packsCheck && packsCheck.checked && lang.packs.length) {
-    body.packs = lang.packs;
-  }
-
-  // Headers
-  const headers = { 'Content-Type': 'application/json' };
-  const apiKey = getSetting('apiKey', '');
-  if (apiKey) {
-    headers['Authorization'] = 'Bearer ' + apiKey;
-  }
-
-  const apiEndpoint = getSetting('apiEndpoint', 'https://uapis.cn/api/v1/execution/run');
-  const isFile = location.protocol === 'file:';
-  const isLocalHost = !isFile && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
-  const proxyEndpoint = (isFile || !isLocalHost) ? 'http://localhost:8787/api/v1/execution/run' : '/api/v1/execution/run';
-  // 由本地壳提供页面时（桌面版 / proxy.py / Android App），壳会带上 API Key 转发，直接走代理，省掉一次 CORS 往返。
-  const useProxyFirst = isLocalHost;
-  const proxyHeaders = Object.assign({}, headers, { 'X-Doge-Upstream': apiEndpoint });
-
-  const MAX_ATTEMPTS = 5;
   const attemptTimeoutMs = (Number(getSetting('timeout', 30000)) || 30000) + 30000;
 
-  // 单次请求设硬上限：网络/沙盒卡住时中止并重试，保证界面不会一直转
-  async function execFetch(url, h) {
+  async function execFetch() {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), attemptTimeoutMs) : null;
     try {
-      return await fetch(url, {
+      return await fetch('/api/v1/execution/run', {
         method: 'POST',
-        headers: h,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: controller ? controller.signal : undefined,
       });
@@ -1728,68 +1602,16 @@ async function runCode() {
     }
   }
 
-  // 云端沙盒偶发 tool_unavailable（进程/线程被 cgroup 限制，os error 11）与 429 限流，
-  // 立刻重试通常就能成功，避免用户看到一串底层 errno。
-  const isSandboxBusy = (r, d) => r.status === 429 || r.status >= 500 ||
-    (d && (d.status === 'tool_unavailable' || d.status === 'rate_limited'));
-
-  let resp, data, elapsed;
-  let viaProxy = useProxyFirst;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const t0 = Date.now();
-      resp = await execFetch(viaProxy ? proxyEndpoint : apiEndpoint, viaProxy ? proxyHeaders : headers);
-      data = await parseBody(resp);
-      elapsed = Date.now() - t0;
-      if (isSandboxBusy(resp, data) && attempt < MAX_ATTEMPTS) {
-        outputData.info = `[${lang.name}] 云端沙盒繁忙（${data.status || 'HTTP ' + resp.status}），重试 ${attempt}/${MAX_ATTEMPTS - 1}...\n`;
-        renderOutput();
-        await new Promise(resolve => setTimeout(resolve, 400 * attempt));
-        continue;
-      }
-      break;
-    } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
-      const timedOut = (err && err.name === 'AbortError') || /abort/i.test(msg);
-      const corsBlocked = msg.includes('Failed to fetch') || msg.includes('CORS') || msg.includes('NetworkError');
-      if (timedOut && attempt < MAX_ATTEMPTS) {
-        outputData.info = `[${lang.name}] 请求超时（${Math.round(attemptTimeoutMs / 1000)}s），重试 ${attempt}/${MAX_ATTEMPTS - 1}...\n`;
-        renderOutput();
-        continue;
-      }
-      if (!viaProxy && corsBlocked && attempt < MAX_ATTEMPTS) {
-        viaProxy = true;
-        showToast('Proxy mode active (localhost:8787)', 'info');
-        continue;
-      }
-      dot.className = 'status-dot error';
-      if (viaProxy) {
-        outputData.stderr = `本地转发失败：${msg}\n\n请检查网络连接后重试。`;
-        outputData.info = `[${lang.name}] Local proxy failed\n`;
-        showToast('✗ 网络请求失败', 'error');
-      } else if (corsBlocked) {
-        outputData.stderr = `CORS blocked the direct API call.\n\n` +
-          `To fix this, start the local proxy:\n\n` +
-          `  Node.js:  node proxy.mjs\n` +
-          `  Python:   python proxy.py\n\n` +
-          `Then open: http://localhost:8787\n\n` +
-          `Or paste your API key in Settings (⚙) to use direct mode.`;
-        outputData.info = `[${lang.name}] CORS blocked\n`;
-        showToast('Proxy not running - see output', 'error');
-      } else {
-        outputData.stderr = `Network error: ${msg}\n\nMake sure you have internet access.`;
-        outputData.info = `[${lang.name}] Request failed\n`;
-        showToast('✗ Network Error', 'error');
-      }
-      isRunning = false;
-      btn.classList.remove('running');
-      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run <kbd>Ctrl+↵</kbd>`;
-      renderOutput();
-      return;
-    }
-  }
-
-  if (!data) {
+  let data, elapsed;
+  try {
+    const t0 = Date.now();
+    data = await parseBody(await execFetch());
+    elapsed = Date.now() - t0;
+  } catch (err) {
+    dot.className = 'status-dot error';
+    outputData.stderr = `本地执行服务不可用：${err.message}`;
+    outputData.info = `[${lang.name}] 本地运行失败\n`;
+    showToast('本地执行失败', 'error');
     isRunning = false;
     btn.classList.remove('running');
     btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run <kbd>Ctrl+↵</kbd>`;
@@ -1823,11 +1645,11 @@ async function runCode() {
         (earlyKill ? `\n注意：进程只运行了 ${data.run_ms}ms 就被沙盒杀掉（signal ${data.signal != null ? data.signal : '?'}），可能是沙盒侧异常而非真的超时。` : '');
       outputData.info = buildInfo(data, elapsed);
       showToast('✗ Timeout', 'error');
-    } else if (data.status === 'tool_unavailable' || data.status === 'rate_limited') {
+    } else if (data.status === 'runtime_not_ready') {
       dot.className = 'status-dot error';
-      outputData.stderr = `云端沙盒繁忙（${data.status}），已自动重试 ${MAX_ATTEMPTS - 1} 次仍未成功，请稍后再试。\n\n原始错误：${data.error || data.message || data.status}`;
+      outputData.stderr = data.message || '本地 C/C++ 运行环境尚未就绪';
       outputData.info = buildInfo(data, elapsed);
-      showToast('✗ 云端沙盒繁忙', 'error');
+      showToast('本地运行环境未就绪', 'error');
     } else {
       dot.className = 'status-dot error';
       outputData.stderr = data.message || data.error || JSON.stringify(data, null, 2);
@@ -1836,9 +1658,9 @@ async function runCode() {
     }
   } catch (err) {
     dot.className = 'status-dot error';
-    outputData.stderr = `Network error: ${err.message}\n\nMake sure you have internet access.\nIf CORS blocks the request, check browser console.`;
-    outputData.info = `[${lang.name}] Request failed\n`;
-    showToast('✗ Network Error', 'error');
+    outputData.stderr = `本地执行失败：${err.message}`;
+    outputData.info = `[${lang.name}] 本地运行失败\n`;
+    showToast('本地执行失败', 'error');
   }
 
   // Update stderr count
@@ -1987,14 +1809,8 @@ function initResize() {
 // Keybindings
 function initKeybindings() {
   document.addEventListener('keydown', (e) => {
-    // Ctrl+Shift+Enter = Debug
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
-      e.preventDefault();
-      debugCode();
-      return;
-    }
     // Ctrl+Enter = Run
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'Enter') {
       e.preventDefault();
       runCode();
       return;
@@ -2028,8 +1844,8 @@ function initKeybindings() {
       showToast('Theme toggle - coming soon!', 'info');
       return;
     }
-    // Ctrl+1~6 = Switch language
-    if ((e.ctrlKey || e.metaKey) && e.key >= '1' && e.key <= '6') {
+    // Ctrl+1~2 = Switch language
+    if ((e.ctrlKey || e.metaKey) && e.key >= '1' && e.key <= '2') {
       e.preventDefault();
       const idx = parseInt(e.key) - 1;
       if (LANGUAGES[idx]) switchLang(LANGUAGES[idx].id);
@@ -2044,22 +1860,29 @@ function toggleSettings() {
   panel.classList.toggle('show');
   if (panel.classList.contains('show')) {
     // Load current settings
-    document.getElementById('apiKeyInput').value = getSetting('apiKey', '');
-    document.getElementById('apiEndpoint').value = getSetting('apiEndpoint', 'https://uapis.cn/api/v1/execution/run');
     document.getElementById('timeoutInput').value = getSetting('timeout', 30000);
     document.getElementById('codeSizeInput').value = getSetting('codeSize', defaultCodeSize());
   }
 }
 
 function saveSettings() {
-  setSetting('apiKey', document.getElementById('apiKeyInput').value.trim());
-  setSetting('apiEndpoint', document.getElementById('apiEndpoint').value.trim());
   setSetting('timeout', parseInt(document.getElementById('timeoutInput').value) || 30000);
   setSetting('codeSize', parseInt(document.getElementById('codeSizeInput').value) || defaultCodeSize());
   applyCodeSize();
   toggleSettings();
   showToast('Settings saved', 'success');
 }
+
+function pickToolchain() {
+  if (window.DogeNative && DogeNative.pickToolchain) DogeNative.pickToolchain();
+  else showToast('请在 Doge IDE+ APK 中导入资源包', 'info');
+}
+
+window.toolchainImported = function(ok, message) {
+  const hint = document.getElementById('toolchainHint');
+  if (ok) { hint.textContent = '资源包已导入，可离线准备本地运行'; showToast('资源包导入成功', 'success'); }
+  else { hint.textContent = message || '资源包导入失败'; showToast('资源包导入失败', 'error'); }
+};
 
 function getSetting(key, defaultVal) {
   try {

@@ -20,7 +20,16 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.JavascriptInterface;
 import android.widget.Toast;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import org.json.JSONObject;
 
 /**
  * Doge IDE 平板壳：一个全屏横屏的 WebView，内容由进程内 {@link LocalServer} 提供。
@@ -32,6 +41,7 @@ public class MainActivity extends Activity {
     private static final String TAG = "DogeIDE";
     private static final int BG = Color.parseColor("#1A1B26");
     private static final long BACK_GRACE_MS = 1200L;
+    private static final int PICK_TOOLCHAIN = 42;
 
     private WebView web;
     private LocalServer server;
@@ -77,11 +87,96 @@ public class MainActivity extends Activity {
             WebView.setWebContentsDebuggingEnabled(true);
         }
         configure(web.getSettings());
+        web.addJavascriptInterface(new ToolchainBridge(), "DogeNative");
         web.setWebViewClient(new LocalOnlyClient());
         setContentView(web);
 
         applyImmersive();
         web.loadUrl(base + "/");
+    }
+
+    private final class ToolchainBridge {
+        @JavascriptInterface
+        public void pickToolchain() {
+            runOnUiThread(() -> {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("application/zip");
+                startActivityForResult(intent, PICK_TOOLCHAIN);
+            });
+        }
+
+        @JavascriptInterface
+        public boolean isToolchainReady() {
+            return new File(getFilesDir(), "toolchain/manifest.json").isFile();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_TOOLCHAIN || resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        new Thread(() -> {
+            try {
+                installToolchain(uri);
+                runOnUiThread(() -> web.evaluateJavascript("window.toolchainImported && window.toolchainImported(true, '')", null));
+            } catch (Exception e) {
+                Log.e(TAG, "toolchain import failed", e);
+                String message = e.getMessage() == null ? "导入失败" : e.getMessage().replace("\\", "\\\\").replace("'", "\\'");
+                runOnUiThread(() -> web.evaluateJavascript("window.toolchainImported && window.toolchainImported(false, '" + message + "')", null));
+            }
+        }, "doge-toolchain-import").start();
+    }
+
+    private void installToolchain(Uri uri) throws IOException {
+        File root = new File(getFilesDir(), "toolchain");
+        File staging = new File(getFilesDir(), "toolchain.importing");
+        deleteTree(staging);
+        if (!staging.mkdirs() && !staging.isDirectory()) throw new IOException("无法创建临时目录");
+        try (InputStream raw = getContentResolver().openInputStream(uri);
+             ZipInputStream zip = new ZipInputStream(raw)) {
+            if (raw == null) throw new IOException("无法读取资源包");
+            ZipEntry entry;
+            byte[] buffer = new byte[32768];
+            while ((entry = zip.getNextEntry()) != null) {
+                String name = entry.getName().replace('\\', '/');
+                if (name.startsWith("/") || name.contains("../")) throw new IOException("资源包路径无效");
+                File out = new File(staging, name);
+                if (!out.getCanonicalPath().startsWith(staging.getCanonicalPath() + File.separator)) throw new IOException("资源包路径无效");
+                if (entry.isDirectory()) { out.mkdirs(); continue; }
+                File parent = out.getParentFile();
+                if (parent != null) parent.mkdirs();
+                try (OutputStream target = new FileOutputStream(out)) {
+                    int n; while ((n = zip.read(buffer)) >= 0) { if (n > 0) target.write(buffer, 0, n); }
+                }
+            }
+        }
+        File manifest = new File(staging, "manifest.json");
+        if (!manifest.isFile()) throw new IOException("缺少资源包 manifest.json");
+        try {
+            JSONObject meta = new JSONObject(new String(java.nio.file.Files.readAllBytes(manifest.toPath()), java.nio.charset.StandardCharsets.UTF_8));
+            if (meta.optInt("format", 0) != 1) throw new IOException("不支持的资源包格式");
+            File clang = new File(staging, meta.optString("clang", "bin/clang"));
+            File sysroot = new File(staging, meta.optString("sysroot", "wasi-sysroot"));
+            if (!clang.isFile() || !sysroot.isDirectory()) throw new IOException("资源包缺少 Clang 或 WASI sysroot");
+            if (!clang.setExecutable(true, false)) throw new IOException("无法启用 Clang 执行权限");
+            for (String executable : new String[]{"clang++", "clang-21", "clang++-21", "wasm-ld", "ld.lld"}) {
+                File file = new File(staging, "bin/" + executable);
+                if (file.isFile() && !file.setExecutable(true, false)) throw new IOException("无法启用工具执行权限: " + executable);
+            }
+        } catch (org.json.JSONException e) {
+            throw new IOException("manifest.json 无效", e);
+        }
+        deleteTree(root);
+        if (!staging.renameTo(root)) throw new IOException("无法安装资源包");
+    }
+
+    private static void deleteTree(File file) {
+        if (!file.exists()) return;
+        File[] children = file.listFiles();
+        if (children != null) for (File child : children) deleteTree(child);
+        file.delete();
     }
 
     private void configure(WebSettings s) {

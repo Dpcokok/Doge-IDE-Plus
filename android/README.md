@@ -1,11 +1,14 @@
-# Doge IDE — Android 平板版
+# Doge IDE+ — Android 平板版
+
+> local-runtime 分支正在迁移本地 C/C++ 执行。现阶段 Run 只访问本机接口，
+> 执行器未接入前会明确报告未就绪；下文云端代理与已验证产物的描述属于原云端版历史记录。
 
 把桌面版（Go + WebView2 + 单页 `doge-ide.html`）原样搬到 Android 平板上：
 **纯 Java WebView 壳 + 零第三方依赖**，一个进程、一个 APK，没有多余后台服务。
 
 - 目标设备：13 英寸平板，**强制横屏**（`sensorLandscape`）
 - 最低系统：Android 7.0（API 24），目标 API 35
-- 包名：`com.doge.ide`
+- 包名：`com.doge.ide.plus`
 
 ## 目录结构
 
@@ -20,7 +23,7 @@ android/
     src/main/AndroidManifest.xml
     src/main/java/com/doge/ide/
       MainActivity.java        WebView、沉浸式全屏、返回键、外部链接
-      LocalServer.java         127.0.0.1 迷你 HTTP 服务 + 云端沙盒代理
+       LocalServer.java         127.0.0.1 迷你 HTTP 服务
     src/main/res/...           主题、颜色、文案、启动图标、网络安全配置
 ```
 

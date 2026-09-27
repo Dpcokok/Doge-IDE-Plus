@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   只允许明文访问本机回环地址：页面由进程内 LocalServer 提供，同源即可。
-  对外的云端沙盒请求由原生 HttpURLConnection 发出，走系统信任的 HTTPS。
+  未来资源包下载使用系统信任的 HTTPS。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false">
