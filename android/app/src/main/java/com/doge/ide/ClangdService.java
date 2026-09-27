@@ -61,6 +61,9 @@ final class ClangdService implements Closeable {
     private File syncWorkspace(JSONObject body) throws Exception {
         File root = new File(filesDir, "workspace/clangd"); if (!root.isDirectory()) root.mkdirs(); JSONArray files = body.optJSONArray("files");
         if (files != null) for (int i=0;i<files.length();i++) { JSONObject f=files.optJSONObject(i); if(f==null)continue; String p=f.optString("path",""); if(!p.matches("[A-Za-z0-9._/-]+")||p.contains(".."))continue; File target=new File(root,p); if(target.getParentFile()!=null)target.getParentFile().mkdirs(); java.nio.file.Files.write(target.toPath(),f.optString("code","").getBytes(StandardCharsets.UTF_8)); }
+        JSONArray commands = new JSONArray();
+        if (files != null) for (int i=0;i<files.length();i++) { JSONObject f=files.optJSONObject(i); if(f==null)continue; String p=f.optString("path",""); String lower=p.toLowerCase(); if(!(lower.endsWith(".c")||lower.endsWith(".cc")||lower.endsWith(".cpp")||lower.endsWith(".cxx")))continue; File source=new File(root,p); String compiler=lower.endsWith(".c")?"clang":"clang++"; commands.put(new JSONObject().put("directory",root.getAbsolutePath()).put("file",source.getAbsolutePath()).put("arguments",new JSONArray().put(new File(toolchain,"bin/"+compiler).getAbsolutePath()).put("--target=wasm32-wasip1").put("--sysroot="+new File(toolchain,"wasi-sysroot").getAbsolutePath()).put("-std="+(lower.endsWith(".c")?"c17":"c++20")).put("-fsyntax-only").put(source.getAbsolutePath()))); }
+        java.nio.file.Files.write(new File(root, "compile_commands.json").toPath(), commands.toString(2).getBytes(StandardCharsets.UTF_8));
         return root;
     }
     private static String read(File f) throws IOException { return new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); }

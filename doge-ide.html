@@ -759,15 +759,18 @@ function dogeCompletions(cm) {
 function clangdCompletions(cm) {
   const cur = cm.getCursor();
   const fallback = () => dogeCompletions(cm);
-  if (!(window.DogeNative && DogeNative.isToolchainReady)) return fallback();
+  const initial = fallback();
+  if (!(window.DogeNative && DogeNative.isToolchainReady)) return initial;
   const body = { path: currentFilePath, line: cur.line, column: cur.ch, files: project.files.map(file => ({ path:file.path, code:file.code })) };
-  return fetch('/api/v1/intel/completion', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+  const callback = arguments.length > 1 && typeof arguments[1] === 'function' ? arguments[1] : null;
+  fetch('/api/v1/intel/completion', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
     .then(response => response.ok ? response.json() : Promise.reject(new Error('clangd unavailable')))
     .then(result => {
       const items = Array.isArray(result.items) ? result.items : [];
       const list = items.map(item => typeof item === 'string' ? item : (item.label || item.insertText || '')).filter(Boolean);
-      return list.length ? { list, from: CodeMirror.Pos(cur.line, Math.max(0, cur.ch - currentCompletionPrefix(cm).length)), to: cur } : fallback();
-    }).catch(fallback);
+      if (callback) callback(list.length ? { list, from: CodeMirror.Pos(cur.line, Math.max(0, cur.ch - currentCompletionPrefix(cm).length)), to: cur } : initial);
+    }).catch(() => { if (callback) callback(initial); });
+  return initial;
 }
 function currentCompletionPrefix(cm) { const cur=cm.getCursor(), line=cm.getLine(cur.line).slice(0,cur.ch); const match=line.match(/[A-Za-z_][A-Za-z0-9_]*$/); return match ? match[0] : ''; }
 
