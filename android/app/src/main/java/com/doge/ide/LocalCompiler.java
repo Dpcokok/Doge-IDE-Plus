@@ -42,6 +42,7 @@ final class LocalCompiler {
             }
             String entry = request.optString("entry", "main." + ("cpp".equals(language) ? "cpp" : "c"));
             String stdin = request.optString("stdin", "");
+            JSONObject build = request.optJSONObject("build");
             int timeout = Math.max(1000, Math.min(30000, request.optInt("timeout_ms", 30000)));
             if (!"c".equals(language) && !"cpp".equals(language)) {
                 return error("invalid_request", "仅支持 C 和 C++");
@@ -96,6 +97,7 @@ final class LocalCompiler {
                         compilerFile.getAbsolutePath(), "--target=" + target, "--sysroot=" + sysroot.getAbsolutePath(),
                         "-O2", "-std=" + (lower.endsWith(".c") ? "c17" : "c++20"),
                         "-fno-exceptions", "-fno-rtti", "-c", source.getAbsolutePath(), "-o", object.getAbsolutePath());
+                applyBuildOptions(compiler, build, work, sysroot);
                 configureEnvironment(compiler, toolchain, work);
                 ProcessResult compiled = runProcess(compiler, timeout);
                 if (!compiled.finished) return result("timeout", "", compiled.stderr, -1);
@@ -119,6 +121,7 @@ final class LocalCompiler {
             } else {
                 linkArgs.add("-lc"); linkArgs.add(builtins.getAbsolutePath()); linkArgs.add("-o"); linkArgs.add(wasm.getAbsolutePath());
             }
+            applyLinkOptions(linkArgs, build, work, sysroot);
             ProcessBuilder link = new ProcessBuilder(linkArgs);
             configureEnvironment(link, toolchain, work);
             ProcessResult linked = runProcess(link, timeout);
@@ -132,6 +135,37 @@ final class LocalCompiler {
         } catch (Exception e) {
             return error("runtime_error", e.toString());
         }
+    }
+
+    private static void applyBuildOptions(ProcessBuilder process, JSONObject build, File work, File sysroot) {
+        if (build == null) return;
+        String opt = build.optString("optimization", "2");
+        java.util.List<String> command = process.command();
+        for (int i = 0; i < command.size(); i++) if ("-O2".equals(command.get(i))) command.set(i, "-O" + (opt.matches("[0-3s]") ? opt : "2"));
+        JSONArray defines = build.optJSONArray("defines");
+        if (defines != null) for (int i = 0; i < defines.length(); i++) {
+            String value = defines.optString(i, ""); if (value.matches("[A-Za-z_][A-Za-z0-9_]*(=.*)?")) command.add("-D" + value);
+        }
+        JSONArray includes = build.optJSONArray("include_paths");
+        if (includes != null) for (int i = 0; i < includes.length(); i++) {
+            String path = safeRelative(includes.optString(i, "")); if (path != null) command.add("-I" + new File(work, path).getAbsolutePath());
+        }
+    }
+
+    private static void applyLinkOptions(java.util.ArrayList<String> args, JSONObject build, File work, File sysroot) {
+        if (build == null) return;
+        JSONArray libraryPaths = build.optJSONArray("library_paths");
+        if (libraryPaths != null) for (int i = 0; i < libraryPaths.length(); i++) {
+            String path = safeRelative(libraryPaths.optString(i, "")); if (path != null) args.add("-L" + new File(work, path).getAbsolutePath());
+        }
+        JSONArray libraries = build.optJSONArray("libraries");
+        if (libraries != null) for (int i = 0; i < libraries.length(); i++) {
+            String name = libraries.optString(i, ""); if (name.matches("[A-Za-z0-9_+.-]+")) args.add("-l" + name);
+        }
+    }
+
+    private static String safeRelative(String path) {
+        return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.contains("..") ? path : null;
     }
 
     private void configureEnvironment(ProcessBuilder process, File toolchain, File work) {

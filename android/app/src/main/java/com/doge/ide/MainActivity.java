@@ -232,10 +232,14 @@ public class MainActivity extends Activity {
             if (added.contains(entry.getKey())) continue;
             files.put(new JSONObject().put("path", entry.getKey()).put("code", entry.getValue()));
         }
-        JSONObject project = new JSONObject();
-        project.put("name", name == null || name.isEmpty() ? queryDisplayName(tree) : name);
-        project.put("files", files);
-        return project;
+            JSONObject project = new JSONObject();
+            project.put("name", name == null || name.isEmpty() ? queryDisplayName(tree) : name);
+            project.put("files", files);
+            if (manifest != null) {
+                if (manifest.has("buildProfiles")) project.put("buildProfiles", manifest.get("buildProfiles"));
+                if (manifest.has("dependencies")) project.put("dependencies", manifest.get("dependencies"));
+            }
+            return project;
     }
 
     private void scanSourceFiles(Uri tree, String documentId, String prefix, LinkedHashMap<String, String> files) throws Exception {
@@ -317,6 +321,8 @@ public class MainActivity extends Activity {
         manifest.put("format", 1);
         manifest.put("name", project.optString("name", "Project"));
         manifest.put("files", new JSONArray(currentPaths));
+        if (project.has("buildProfiles")) manifest.put("buildProfiles", project.get("buildProfiles"));
+        if (project.has("dependencies")) manifest.put("dependencies", project.get("dependencies"));
         writeTextFile(tree, rootId, PROJECT_MANIFEST, manifest.toString(2));
     }
 
