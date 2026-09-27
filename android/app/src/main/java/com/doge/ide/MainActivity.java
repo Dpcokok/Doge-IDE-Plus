@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private static final int PICK_TOOLCHAIN = 42;
     private static final int PICK_PROJECT = 43;
     private static final int MAX_PROJECT_FILE = 2 * 1024 * 1024;
-    private static final long MAX_TOOLCHAIN_BYTES = 512L * 1024 * 1024;
+    private static final long MAX_TOOLCHAIN_BYTES = 1024L * 1024 * 1024;
     private static final int MAX_TOOLCHAIN_ENTRIES = 100000;
     private static final String PROJECT_MANIFEST = ".doge-project.json";
 
@@ -195,9 +195,9 @@ public class MainActivity extends Activity {
                 });
             } catch (Exception e) {
                 Log.e(TAG, "toolchain import failed", e);
-                String message = e.getMessage() == null ? "导入失败" : e.getMessage().replace("\\", "\\\\").replace("'", "\\'");
+                String message = e.getMessage() == null ? "导入失败" : e.getMessage();
                 runOnUiThread(() -> {
-                    if (web != null) web.evaluateJavascript("window.toolchainImported && window.toolchainImported(false, '" + message + "')", null);
+                    if (web != null) web.evaluateJavascript("window.toolchainImported && window.toolchainImported(false, " + JSONObject.quote(message) + ")", null);
                 });
             }
         }, "doge-toolchain-import").start();
@@ -401,8 +401,13 @@ public class MainActivity extends Activity {
         if (!staging.mkdirs() && !staging.isDirectory()) throw new IOException("无法创建临时目录");
         boolean ok = false;
         try {
-            if (staging.getUsableSpace() < MAX_TOOLCHAIN_BYTES) throw new IOException("设备剩余空间不足");
             long compressedSize = querySize(uri);
+            long requiredSpace = compressedSize > 0
+                    ? Math.min(MAX_TOOLCHAIN_BYTES, Math.max(256L * 1024 * 1024, compressedSize * 4L))
+                    : 768L * 1024 * 1024;
+            if (staging.getUsableSpace() < requiredSpace) {
+                throw new IOException("设备剩余空间不足，需要至少 " + (requiredSpace / (1024 * 1024)) + " MiB");
+            }
             long progressBytes = 0;
             notifyToolchainProgress(1, "正在读取资源包...");
             try (InputStream raw = getContentResolver().openInputStream(uri);
