@@ -500,6 +500,7 @@ let isRunning = false;
 let activeTaskId = null;
 let project = { name: 'Untitled Project', files: [] };
 let currentFilePath = 'main.c';
+let switchingProjectFile = false;
 let pendingDiskSave = false;
 let outputData = { stdout:'', stderr:'', info:'' };
 let taskHistory = [];
@@ -1181,11 +1182,11 @@ function initEditor() {
     lineWrapping: true,
     dragDrop: false,
     viewportMargin: 30,
-     hintOptions: { hint: clangdCompletions, completeSingle: false },
+     hintOptions: { hint: dogeCompletions, completeSingle: false },
     extraKeys: {
       'Ctrl-Enter': () => runCode(),
       'Cmd-Enter': () => runCode(),
-      'Ctrl-Space': 'autocomplete',
+      'Ctrl-Space': (cm) => cm.showHint({ hint: dogeCompletions, completeSingle: false }),
       'Tab': (cm) => {
         if (cm.somethingSelected()) {
           cm.indentSelection('add');
@@ -1197,6 +1198,7 @@ function initEditor() {
   });
   editor.setValue(getProjectFile(currentFilePath).code || lang.sample);
   editor.on('change', () => {
+    if (switchingProjectFile) return;
     const file = getProjectFile(currentFilePath);
     if (file) file.code = editor.getValue();
     scheduleProjectSave();
@@ -1397,17 +1399,16 @@ function switchProjectFile(path) {
   saveCurrentFile();
   const file = getProjectFile(path);
   if (!file) return;
-  currentFilePath = path;
   const lang = languageForPath(path);
-  currentLang = lang.id;
   if (editor) {
-    editor.operation(() => {
-      editor.setOption('mode', lang.mode);
-      editor.setValue(file.code || lang.sample);
-    });
+    switchingProjectFile = true;
+    editor.operation(() => { editor.setOption('mode', lang.mode); editor.setValue(file.code || lang.sample); });
+    switchingProjectFile = false;
     renderBreakpoints();
     scheduleLint();
   }
+  currentFilePath = path;
+  currentLang = lang.id;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.lang === currentLang));
   updateLangInfo();
   renderProjectFiles();
