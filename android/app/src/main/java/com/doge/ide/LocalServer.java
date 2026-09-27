@@ -22,6 +22,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.json.JSONObject;
 
 /**
  * 进程内迷你 HTTP 服务，等价于桌面版 main.go 的角色：
@@ -36,6 +37,7 @@ final class LocalServer implements Closeable {
     private static final String TAG = "DogeIDE";
     private static final String API_PATH = "/api/v1/execution/run";
     private static final String CANCEL_PATH = "/api/v1/execution/cancel";
+    private static final String TASKS_PATH = "/api/v1/tasks";
     private static final int PREFERRED_PORT = 8787;
     private static final int MAX_BODY = 10 << 20;
     private static final int SOCKET_TIMEOUT_MS = 15000;
@@ -43,6 +45,7 @@ final class LocalServer implements Closeable {
 
     private final AssetManager assets;
     private final LocalCompiler compiler;
+    private final TaskRegistry taskRegistry;
     private ServerSocket serverSocket;
     private ExecutorService workers;
     private volatile boolean running;
@@ -51,6 +54,7 @@ final class LocalServer implements Closeable {
     LocalServer(Context context) {
         this.assets = context.getApplicationContext().getAssets();
         this.compiler = new LocalCompiler(context);
+        this.taskRegistry = new TaskRegistry(compiler);
     }
 
     /** 启动服务，返回页面基地址（如 http://127.0.0.1:8787）。 */
@@ -90,7 +94,7 @@ final class LocalServer implements Closeable {
     @Override
     public synchronized void close() {
         running = false;
-        LocalCompiler.cancelActive();
+        taskRegistry.close();
         if (serverSocket != null) {
             try {
                 serverSocket.close();
@@ -319,6 +323,30 @@ final class LocalServer implements Closeable {
     // ---------------------------------------------------------------- 路由
 
     private boolean respond(OutputStream out, Request req) throws IOException {
+        if (TASKS_PATH.equals(req.path)) {
+            if ("POST".equals(req.method)) {
+                try {
+                    String id = taskRegistry.submit(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8));
+                    return sendBytes(out, req, 202, "application/json; charset=utf-8", ("{\"task_id\":\"" + id + "\",\"status\":\"queued\"}").getBytes(StandardCharsets.UTF_8));
+                } catch (IllegalStateException full) { return sendBytes(out, req, 429, "application/json; charset=utf-8", ("{\"status\":\"error\",\"message\":" + JSONObject.quote(full.getMessage()) + "}").getBytes(StandardCharsets.UTF_8)); }
+                catch (Exception bad) { return sendBytes(out, req, 400, "application/json; charset=utf-8", ("{\"status\":\"error\",\"message\":" + JSONObject.quote(bad.toString()) + "}").getBytes(StandardCharsets.UTF_8)); }
+            }
+            if ("GET".equals(req.method)) {
+                try { return sendBytes(out, req, 200, "application/json; charset=utf-8", taskRegistry.list().toString().getBytes(StandardCharsets.UTF_8)); }
+                catch (Exception e) { return sendBytes(out, req, 500, "text/plain", e.toString().getBytes(StandardCharsets.UTF_8)); }
+            }
+        }
+        if (req.path.startsWith(TASKS_PATH + "/")) {
+            String rest = req.path.substring((TASKS_PATH + "/").length());
+            if (rest.endsWith("/cancel") && "POST".equals(req.method)) {
+                String id = rest.substring(0, rest.length() - 7); boolean ok = taskRegistry.cancel(id);
+                return sendBytes(out, req, ok ? 200 : 404, "application/json; charset=utf-8", ("{\"task_id\":\"" + id + "\",\"status\":\"" + (ok ? "canceled" : "not_found") + "\"}").getBytes(StandardCharsets.UTF_8));
+            }
+            if ("GET".equals(req.method)) {
+                try { JSONObject task = taskRegistry.get(rest); if (task == null) return sendBytes(out, req, 404, "text/plain", "not found".getBytes(StandardCharsets.UTF_8)); return sendBytes(out, req, 200, "application/json; charset=utf-8", task.toString().getBytes(StandardCharsets.UTF_8)); }
+                catch (Exception e) { return sendBytes(out, req, 500, "text/plain", e.toString().getBytes(StandardCharsets.UTF_8)); }
+            }
+        }
         if (CANCEL_PATH.equals(req.path)) {
             if (!"POST".equals(req.method)) {
                 return sendBytes(out, req, 405, "text/plain; charset=utf-8", "method not allowed".getBytes(StandardCharsets.UTF_8));

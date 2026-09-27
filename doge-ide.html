@@ -493,6 +493,7 @@ int main() {
 let currentLang = 'c';
 let editor;
 let isRunning = false;
+let activeTaskId = null;
 let project = { name: 'Untitled Project', files: [] };
 let currentFilePath = 'main.c';
 let pendingDiskSave = false;
@@ -1815,6 +1816,11 @@ async function runCode() {
   const code = editor.getValue();
   const stdin = document.getElementById('stdinInput').value;
 
+  if (window.DogeNative && DogeNative.isToolchainReady) {
+    await runAsTask(lang, code, stdin);
+    return;
+  }
+
   if (!code.trim()) {
     showToast('Code is empty!', 'error');
     return;
@@ -1962,8 +1968,59 @@ async function runCode() {
   renderOutput();
 }
 
+async function runAsTask(lang, code, stdin) {
+  isRunning = true;
+  const btn = document.getElementById('runBtn');
+  const dot = document.getElementById('statusDot');
+  btn.classList.add('running');
+  btn.innerHTML = '<span class="spinner"></span> Running...';
+  dot.className = 'status-dot running';
+  outputData = { stdout:'', stderr:'', info:`[${lang.name}] 任务排队中...` };
+  renderOutput();
+  const body = { language: lang.apiLang, entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), build: activeBuildProfile(), stdin: stdin || '', timeout_ms: getSetting('timeout', 30000) };
+  try {
+    const created = await fetch('/api/v1/tasks', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }).then(r => r.json());
+    if (!created.task_id) throw new Error(created.message || '任务创建失败');
+    activeTaskId = created.task_id;
+    await pollTask(created.task_id, lang);
+  } catch (error) {
+    dot.className = 'status-dot error';
+    outputData.stderr = error.message || '任务请求失败';
+    outputData.info = `[${lang.name}] 任务失败`;
+    renderOutput();
+  } finally {
+    activeTaskId = null;
+    isRunning = false;
+    btn.classList.remove('running');
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run <kbd>Ctrl+↵</kbd>`;
+  }
+}
+
+async function pollTask(taskId, lang) {
+  while (true) {
+    const task = await fetch('/api/v1/tasks/' + encodeURIComponent(taskId)).then(r => r.json());
+    outputData.stdout = task.stdout || '';
+    outputData.stderr = task.stderr || '';
+    outputData.info = `[${lang.name}] Task ${taskId}\nPhase: ${task.phase}\nStatus: ${task.status}`;
+    renderOutput();
+    if (task.phase === 'finished') {
+      const dot = document.getElementById('statusDot');
+      dot.className = task.status === 'success' ? 'status-dot success' : 'status-dot error';
+      if (task.status === 'success') showToast('✓ Task completed', 'success');
+      else if (task.status === 'canceled') showToast('Task canceled', 'info');
+      else showToast('Task failed', 'error');
+      return task;
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+}
+
 async function cancelExecution() {
   if (!isRunning) return;
+  if (activeTaskId) {
+    try { await fetch('/api/v1/tasks/' + encodeURIComponent(activeTaskId) + '/cancel', { method:'POST', keepalive:true }); } catch (e) {}
+    return;
+  }
   try { await fetch('/api/v1/execution/cancel', { method: 'POST', keepalive: true }); }
   catch (e) { showToast('取消请求失败', 'error'); }
 }
