@@ -53,6 +53,7 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .project-panel{width:190px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column}
 .project-panel.collapsed{width:0!important;border-right:0;overflow:hidden}.project-panel.collapsed>*{display:none}
 .project-head{display:flex;align-items:center;justify-content:space-between;padding:9px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--fg2);font-weight:600}
+.project-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:none;border:0;color:var(--fg2);font:600 12px var(--font-sans);padding:4px 5px;cursor:pointer;text-align:left}.project-name:hover{color:var(--accent)}
 .project-actions{display:flex;gap:4px}.project-actions button{width:26px;height:26px;padding:0;background:var(--bg3);color:var(--fg2);border:1px solid var(--border);border-radius:4px;cursor:pointer}
 .project-actions button:hover{color:var(--accent);border-color:var(--accent)}
 .project-actions button.wide{width:auto;padding:0 7px;font-size:11px}
@@ -1276,15 +1277,18 @@ function saveProjectToDisk() {
 window.projectOpened = function(serialized) {
   try {
     const loaded = typeof serialized === 'string' ? JSON.parse(serialized) : serialized;
-    if (!loaded || !Array.isArray(loaded.files) || !loaded.files.length) throw new Error('项目没有可编辑文件');
+    if (!loaded || !Array.isArray(loaded.files)) throw new Error('项目数据无效');
     project = loaded;
-    if (!Array.isArray(project.files) || !project.files.length) {
-      project.files = defaultProjectFiles();
-    }
-    const nextPath = project.files[0].path;
+    const nextPath = project.files.length ? project.files[0].path : '';
     currentFilePath = '';
     saveProject();
-    if (editor) switchProjectFile(nextPath);
+    if (editor && nextPath) switchProjectFile(nextPath);
+    else if (editor) {
+      editor.setValue('');
+      currentLang = 'c';
+      updateLangInfo();
+      renderProjectFiles();
+    }
     document.getElementById('projectName').textContent = project.name || 'Project';
     showToast('项目已打开', 'success');
     if (pendingDiskSave) setTimeout(saveProjectToDisk, 0);
@@ -1368,18 +1372,19 @@ function switchProjectFile(path) {
   renderProjectFiles();
 }
 function newProjectFile() {
-  const path = prompt('New C/C++ file path', 'util.c');
-  if (!path || !/^[A-Za-z0-9._/-]+\.(c|cc|cpp|cxx)$/i.test(path) || path.includes('..') || path.startsWith('/')) {
-    if (path) showToast('文件名必须是安全的 C/C++ 路径', 'error');
-    return;
-  }
-  if (getProjectFile(path)) { showToast('文件已存在', 'error'); return; }
-  project.files.push({ path, code: '' });
-  saveProject();
-  switchProjectFile(path);
+  dogeInput('新建文件', '输入 C/C++ 文件路径', 'main.c', (path) => {
+    path = path.trim();
+    if (!/^[A-Za-z0-9._/-]+\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(path) || path.includes('..') || path.startsWith('/')) {
+      showToast('文件名必须是安全的 C/C++ 路径', 'error'); return;
+    }
+    if (getProjectFile(path)) { showToast('文件已存在', 'error'); return; }
+    project.files.push({ path, code: '' });
+    saveProject();
+    switchProjectFile(path);
+  });
 }
 function deleteProjectFile() {
-  if (project.files.length <= 1) { showToast('项目至少需要一个文件', 'info'); return; }
+  if (!project.files.length || !currentFilePath) { showToast('项目中没有可删除的文件', 'info'); return; }
   const index = project.files.findIndex(file => file.path === currentFilePath);
   if (index < 0) return;
   const target = currentFilePath;
@@ -1389,7 +1394,24 @@ function deleteProjectFile() {
     saveCurrentFile();
     project.files.splice(at, 1);
     currentFilePath = '';
-    switchProjectFile(project.files[Math.max(0, at - 1)].path);
+    const next = project.files.length ? project.files[Math.min(at, project.files.length - 1)].path : '';
+    if (next) switchProjectFile(next);
+    else {
+      editor.setValue('');
+      currentLang = 'c';
+      updateLangInfo();
+      saveProject();
+    }
+  });
+}
+
+function renameProject() {
+  dogeInput('项目名称', '输入项目名称', project.name || 'Project', (name) => {
+    name = name.trim();
+    if (!name) { showToast('项目名称不能为空', 'error'); return; }
+    project.name = name;
+    saveProject();
+    showToast('项目名称已更新', 'success');
   });
 }
 
@@ -1766,6 +1788,10 @@ function renderDebugPanel() {
 // Run
 async function runCode() {
   if (isRunning) { cancelExecution(); return; }
+  if (!project.files.length || !currentFilePath) {
+    showToast('请先新建一个 C/C++ 文件', 'info');
+    return;
+  }
   syncCurrentFile();
   const lang = languageForPath(currentFilePath);
   currentLang = lang.id;
@@ -2203,6 +2229,27 @@ function dogeConfirm(message, onConfirm, confirmLabel) {
   box.appendChild(actions);
   overlay.appendChild(box);
   document.body.appendChild(overlay);
+}
+
+function dogeInput(title, label, value, onSubmit) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay show';
+  const box = document.createElement('div'); box.className = 'modal';
+  const heading = document.createElement('h3'); heading.textContent = title;
+  const text = document.createElement('p'); text.textContent = label;
+  text.style.cssText = 'margin:8px 0 4px;font-size:13px;color:var(--fg2)';
+  const input = document.createElement('input'); input.type = 'text'; input.value = value || '';
+  input.style.cssText = 'width:100%;padding:10px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;font-size:14px;outline:none';
+  const actions = document.createElement('div'); actions.className = 'settings-actions';
+  const cancel = document.createElement('button'); cancel.className = 'settings-cancel'; cancel.textContent = '取消';
+  const ok = document.createElement('button'); ok.className = 'settings-save'; ok.textContent = '确定';
+  const close = () => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+  cancel.onclick = close;
+  ok.onclick = () => { const result = input.value; close(); onSubmit(result); };
+  input.addEventListener('keydown', (event) => { if (event.key === 'Enter') ok.click(); if (event.key === 'Escape') close(); });
+  overlay.onclick = (event) => { if (event.target === overlay) close(); };
+  actions.append(cancel, ok); box.append(heading, text, input, actions); overlay.appendChild(box); document.body.appendChild(overlay);
+  setTimeout(() => { input.focus(); input.select(); }, 0);
 }
 
 // Start
