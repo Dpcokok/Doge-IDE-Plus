@@ -175,6 +175,8 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .output-content.info{color:var(--fg3)}
 .output-content.debug{white-space:normal;font-family:var(--font-sans);font-size:13px}
 .output-placeholder{color:var(--fg3);font-style:italic}
+.diagnostic-link{display:block;color:var(--red);text-decoration:underline;cursor:pointer;margin-bottom:2px}
+.task-list{padding:8px;border-bottom:1px solid var(--border);max-height:130px;overflow:auto;font:12px var(--font-mono)}.task-row{display:flex;gap:8px;align-items:center;padding:4px 0;color:var(--fg2)}.task-row .task-status{width:7px;height:7px;border-radius:50%;background:var(--fg3)}.task-row.running .task-status{background:var(--orange)}.task-row.success .task-status{background:var(--green)}.task-row.error .task-status{background:var(--red)}
 
 /* Breakpoints */
 .CodeMirror-gutter.doge-breakpoints{width:14px;cursor:pointer}
@@ -376,6 +378,7 @@ body.kb-open .stdin-section{border-top:none}
       <div class="output-tab active" data-tab="stdout" onclick="switchOutputTab('stdout')">stdout</div>
       <div class="output-tab" data-tab="stderr" onclick="switchOutputTab('stderr')">stderr<span class="count" id="stderrCount" style="display:none">0</span></div>
       <div class="output-tab" data-tab="info" onclick="switchOutputTab('info')">info</div>
+      <div class="output-tab" data-tab="tasks" onclick="switchOutputTab('tasks')">Tasks</div>
       <div class="output-tab" data-tab="debug" onclick="switchOutputTab('debug')" hidden>debug<span class="count" id="debugCount" style="display:none">0</span></div>
     </div>
     <div class="output-content stdout" id="outputContent">
@@ -498,6 +501,7 @@ let project = { name: 'Untitled Project', files: [] };
 let currentFilePath = 'main.c';
 let pendingDiskSave = false;
 let outputData = { stdout:'', stderr:'', info:'' };
+let taskHistory = [];
 let currentOutputTab = 'stdout';
 let breakpoints = {};
 let debugState = { events: [], index: -1, lang: null };
@@ -1982,6 +1986,9 @@ async function runAsTask(lang, code, stdin) {
     const created = await fetch('/api/v1/tasks', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }).then(r => r.json());
     if (!created.task_id) throw new Error(created.message || '任务创建失败');
     activeTaskId = created.task_id;
+    taskHistory.unshift({ id: created.task_id, status:'queued', language:lang.name });
+    taskHistory = taskHistory.slice(0, 20);
+    renderTaskList();
     await pollTask(created.task_id, lang);
   } catch (error) {
     dot.className = 'status-dot error';
@@ -1990,6 +1997,7 @@ async function runAsTask(lang, code, stdin) {
     renderOutput();
   } finally {
     activeTaskId = null;
+    renderTaskList();
     isRunning = false;
     btn.classList.remove('running');
     btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run <kbd>Ctrl+↵</kbd>`;
@@ -2002,6 +2010,8 @@ async function pollTask(taskId, lang) {
     outputData.stdout = task.stdout || '';
     outputData.stderr = task.stderr || '';
     outputData.info = `[${lang.name}] Task ${taskId}\nPhase: ${task.phase}\nStatus: ${task.status}`;
+    const history = taskHistory.find(item => item.id === taskId); if (history) history.status = task.status;
+    renderTaskList();
     renderOutput();
     if (task.phase === 'finished') {
       const dot = document.getElementById('statusDot');
@@ -2013,6 +2023,11 @@ async function pollTask(taskId, lang) {
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
+}
+
+function renderTaskList() {
+  const panel = document.getElementById('taskList'); if (!panel) return;
+  panel.innerHTML = taskHistory.map(item => `<div class="task-row ${item.status === 'success' ? 'success' : (item.status === 'queued' || item.status === 'running' ? 'running' : 'error')}"><span class="task-status"></span><span>${escapeHtml(item.id)} · ${escapeHtml(item.language)} · ${escapeHtml(item.status)}</span></div>`).join('');
 }
 
 async function cancelExecution() {
@@ -2048,6 +2063,7 @@ function switchOutputTab(tab) {
 
 function renderOutput() {
   const el = document.getElementById('outputContent');
+  if (currentOutputTab === 'tasks') { el.className = 'output-content info'; el.innerHTML = '<div id="taskList" class="task-list"></div>'; renderTaskList(); return; }
   if (currentOutputTab === 'debug') {
     el.className = 'output-content debug';
     el.innerHTML = renderDebugPanel();
@@ -2060,9 +2076,25 @@ function renderOutput() {
       ? '<span class="output-placeholder">点击 Run 或按 Ctrl+Enter 运行代码...</span>'
       : '<span class="output-placeholder">(empty)</span>';
   } else {
-    el.textContent = content;
+    if (currentOutputTab === 'stderr') {
+      const parts = String(content).split('\n');
+      el.innerHTML = parts.map(line => {
+        const match = line.match(/(?:^|\s)([^\s:]+\.(?:c|cc|cpp|cxx|h|hpp)):(\d+):(\d+)/i);
+        if (!match) return escapeHtml(line);
+        return `<span class="diagnostic-link" data-file="${escapeHtml(match[1])}" data-line="${match[2]}" data-col="${match[3]}">${escapeHtml(line)}</span>`;
+      }).join('\n');
+      el.querySelectorAll('.diagnostic-link').forEach(node => node.addEventListener('click', () => jumpToDiagnostic(node.dataset.file, Number(node.dataset.line), Number(node.dataset.col))));
+    } else el.textContent = content;
     el.scrollTop = el.scrollHeight;
   }
+}
+function jumpToDiagnostic(fileName, line, column) {
+  const file = project.files.find(item => item.path === fileName || item.path.endsWith('/' + fileName));
+  if (!file) { showToast('找不到诊断对应的文件: ' + fileName, 'error'); return; }
+  switchProjectFile(file.path);
+  editor.setCursor(Math.max(0, line - 1), Math.max(0, column - 1));
+  editor.focus();
+  editor.scrollIntoView({ line: Math.max(0, line - 1), ch: Math.max(0, column - 1) }, 140);
 }
 
 // Stdin toggle
