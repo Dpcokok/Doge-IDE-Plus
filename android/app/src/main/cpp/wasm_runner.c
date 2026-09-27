@@ -1,6 +1,8 @@
 #include <jni.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,7 +15,14 @@ typedef struct {
     char *data;
     size_t size;
     size_t capacity;
+    bool truncated;
 } Reader;
+
+typedef struct {
+    int fd;
+    const uint8_t *data;
+    size_t size;
+} InputWriter;
 
 typedef struct {
     wasm_module_inst_t instance;
@@ -23,26 +32,43 @@ typedef struct {
 } Watchdog;
 
 static pthread_once_t runtime_once = PTHREAD_ONCE_INIT;
-static void init_runtime(void) { wasm_runtime_init(); }
+static void init_runtime(void) { signal(SIGPIPE, SIG_IGN); wasm_runtime_init(); }
 
 static void *read_pipe(void *arg) {
     Reader *r = (Reader *)arg;
     char buf[4096];
     ssize_t n;
     while ((n = read(r->fd, buf, sizeof(buf))) > 0) {
-        if (r->size + (size_t)n + 1 > r->capacity) {
+        const size_t max_stream = 1024 * 1024;
+        size_t keep = (size_t)n;
+        if (r->size >= max_stream) { r->truncated = true; continue; }
+        if (r->size + keep > max_stream) { keep = max_stream - r->size; r->truncated = true; }
+        if (r->size + keep + 1 > r->capacity) {
             size_t next = r->capacity ? r->capacity * 2 : 8192;
-            while (next < r->size + (size_t)n + 1) next *= 2;
+            while (next < r->size + keep + 1) next *= 2;
             char *grown = (char *)realloc(r->data, next);
             if (!grown) break;
             r->data = grown;
             r->capacity = next;
         }
-        memcpy(r->data + r->size, buf, (size_t)n);
-        r->size += (size_t)n;
+        memcpy(r->data + r->size, buf, keep);
+        r->size += keep;
     }
     if (r->data) r->data[r->size] = 0;
     close(r->fd);
+    return NULL;
+}
+
+static void *write_pipe(void *arg) {
+    InputWriter *writer = (InputWriter *)arg;
+    size_t offset = 0;
+    while (offset < writer->size) {
+        ssize_t n = write(writer->fd, writer->data + offset, writer->size - offset);
+        if (n > 0) { offset += (size_t)n; continue; }
+        if (n < 0 && errno == EINTR) continue;
+        break;
+    }
+    close(writer->fd);
     return NULL;
 }
 
@@ -60,7 +86,7 @@ static void *watchdog_thread(void *arg) {
 }
 
 static char *json_escape(const char *s, size_t n) {
-    size_t cap = n * 2 + 3, out = 0;
+    size_t cap = n * 6 + 3, out = 0;
     char *p = (char *)malloc(cap);
     if (!p) return NULL;
     p[out++] = '"';
@@ -87,6 +113,27 @@ static char *json_escape(const char *s, size_t n) {
     return p;
 }
 
+static jstring make_result(JNIEnv *env, const char *status, const char *out, const char *err,
+                           uint32_t exit_code, const char *message, bool out_truncated, bool err_truncated) {
+    char *escaped_out = json_escape(out ? out : "", out ? strlen(out) : 0);
+    char *escaped_err = json_escape(err ? err : "", err ? strlen(err) : 0);
+    char *escaped_message = message ? json_escape(message, strlen(message)) : NULL;
+    size_t size = 256 + (escaped_out ? strlen(escaped_out) : 2) + (escaped_err ? strlen(escaped_err) : 2) + (escaped_message ? strlen(escaped_message) : 0);
+    char *result = (char *)malloc(size);
+    if (!result) {
+        free(escaped_out); free(escaped_err); free(escaped_message);
+        return (*env)->NewStringUTF(env, "{\"status\":\"runtime_error\",\"message\":\"out of memory\"}");
+    }
+    snprintf(result, size,
+             "{\"status\":\"%s\",\"stdout\":%s,\"stderr\":%s,\"exit_code\":%u,\"stdout_truncated\":%s,\"stderr_truncated\":%s%s%s}",
+             status, escaped_out ? escaped_out : "\"\"", escaped_err ? escaped_err : "\"\"", exit_code,
+             out_truncated ? "true" : "false", err_truncated ? "true" : "false",
+             escaped_message ? ",\"message\":" : "", escaped_message ? escaped_message : "");
+    jstring value = (*env)->NewStringUTF(env, result);
+    free(result); free(escaped_out); free(escaped_err); free(escaped_message);
+    return value;
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
                                         jbyteArray wasm_bytes, jbyteArray stdin_bytes,
@@ -101,9 +148,8 @@ Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
     char error[1024] = {0};
     wasm_module_t module = wasm_runtime_load(wasm_buf, (uint32_t)wasm_size, error, sizeof(error));
     if (!module) {
-        char *msg = json_escape(error, strlen(error));
-        char result[1400]; snprintf(result, sizeof(result), "{\"status\":\"runtime_error\",\"message\":%s}", msg ? msg : "\"load failed\"");
-        free(msg); free(wasm_buf); return (*env)->NewStringUTF(env, result);
+        jstring result = make_result(env, "runtime_error", "", "", 0, error[0] ? error : "load failed", false, false);
+        free(wasm_buf); return result;
     }
 
     int in_pipe[2], out_pipe[2], err_pipe[2];
@@ -119,12 +165,11 @@ Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
     if (!instance) {
         close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]); close(err_pipe[0]); close(err_pipe[1]);
         wasm_runtime_unload(module); free(wasm_buf);
-        char *msg = json_escape(error, strlen(error)); char result[1400];
-        snprintf(result, sizeof(result), "{\"status\":\"runtime_error\",\"message\":%s}", msg ? msg : "\"instantiate failed\"");
-        free(msg); return (*env)->NewStringUTF(env, result);
+        jstring result = make_result(env, "runtime_error", "", "", 0, error[0] ? error : "instantiate failed", false, false);
+        return result;
     }
 
-    Reader stdout_reader = {out_pipe[0], NULL, 0, 0}, stderr_reader = {err_pipe[0], NULL, 0, 0};
+    Reader stdout_reader = {out_pipe[0], NULL, 0, 0, false}, stderr_reader = {err_pipe[0], NULL, 0, 0, false};
     pthread_t stdout_thread, stderr_thread;
     pthread_create(&stdout_thread, NULL, read_pipe, &stdout_reader);
     pthread_create(&stderr_thread, NULL, read_pipe, &stderr_reader);
@@ -132,13 +177,20 @@ Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
     pthread_t watchdog_thread_id;
     pthread_create(&watchdog_thread_id, NULL, watchdog_thread, &watchdog);
     jsize stdin_size = stdin_bytes ? (*env)->GetArrayLength(env, stdin_bytes) : 0;
-    if (stdin_size) {
-        jbyte *input = (*env)->GetByteArrayElements(env, stdin_bytes, NULL);
-        (void)write(in_pipe[1], input, (size_t)stdin_size);
-        (*env)->ReleaseByteArrayElements(env, stdin_bytes, input, JNI_ABORT);
+    uint8_t *input = NULL;
+    pthread_t input_thread;
+    bool input_thread_started = false;
+    if (stdin_size > 0) {
+        input = (uint8_t *)malloc((size_t)stdin_size);
+        if (input) (*env)->GetByteArrayRegion(env, stdin_bytes, 0, stdin_size, (jbyte *)input);
     }
-    close(in_pipe[1]);
+    InputWriter writer = {in_pipe[1], input, input ? (size_t)stdin_size : 0};
+    if (pthread_create(&input_thread, NULL, write_pipe, &writer) == 0) input_thread_started = true;
+    else close(in_pipe[1]);
     bool ok = wasm_application_execute_main(instance, 1, (char **)argv);
+    close(in_pipe[0]);
+    if (input_thread_started) pthread_join(input_thread, NULL);
+    free(input);
     if (!watchdog.fired) {
         watchdog.canceled = true;
     }
@@ -147,14 +199,9 @@ Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
     pthread_join(stdout_thread, NULL); pthread_join(stderr_thread, NULL);
     uint32_t exit_code = wasm_runtime_get_wasi_exit_code(instance);
     const char *exception = wasm_runtime_get_exception(instance);
-    char *out = json_escape(stdout_reader.data ? stdout_reader.data : "", stdout_reader.size);
-    char *err = json_escape(stderr_reader.data ? stderr_reader.data : "", stderr_reader.size);
-    char *msg = exception ? json_escape(exception, strlen(exception)) : NULL;
-    char result[4096];
-    snprintf(result, sizeof(result), "{\"status\":\"%s\",\"stdout\":%s,\"stderr\":%s,\"exit_code\":%u%s%s}",
-             watchdog.fired && !ok ? "timeout" : (ok ? "success" : "runtime_error"), out ? out : "\"\"", err ? err : "\"\"", exit_code,
-             msg ? ",\"message\":" : "", msg ? msg : "");
-    free(out); free(err); free(msg); free(stdout_reader.data); free(stderr_reader.data);
+    const char *status = watchdog.fired && !ok ? "timeout" : (ok ? "success" : "runtime_error");
+    jstring result = make_result(env, status, stdout_reader.data, stderr_reader.data, exit_code, exception, stdout_reader.truncated, stderr_reader.truncated);
+    free(stdout_reader.data); free(stderr_reader.data);
     wasm_runtime_deinstantiate(instance); wasm_runtime_unload(module); free(wasm_buf);
-    return (*env)->NewStringUTF(env, result);
+    return result;
 }

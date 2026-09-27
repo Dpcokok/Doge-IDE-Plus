@@ -1,13 +1,17 @@
 # Doge IDE+ — Android 平板版
 
-> local-runtime 分支正在迁移本地 C/C++ 执行。现阶段 Run 只访问本机接口，
-> 执行器未接入前会明确报告未就绪；下文云端代理与已验证产物的描述属于原云端版历史记录。
+> 本地 C/C++ 执行已接入：导入 ARM64 工具链资源包后，编译和运行全部在设备私有目录内完成，
+> 不访问云端。下文出现的云端代理、API Key 与 `X-Doge-Upstream` 只属于原云端版迁移背景，
+> 不代表当前行为；历史构建校验数据也已单独标注。
 
-把桌面版（Go + WebView2 + 单页 `doge-ide.html`）原样搬到 Android 平板上：
-**纯 Java WebView 壳 + 零第三方依赖**，一个进程、一个 APK，没有多余后台服务。
+把桌面版（Go + WebView2 + 单页 `doge-ide.html`）搬到 Android 平板上：
+**Java WebView 壳 + 进程内本地运行时**，不引入第三方 Gradle 依赖，一个进程、一个 APK，
+没有多余后台服务；唯一的 native 组件是随包发布的 WAMR（`libiwasm.so`）。
 
 - 目标设备：13 英寸平板，**强制横屏**（`sensorLandscape`）
-- 最低系统：Android 7.0（API 24），目标 API 35
+- 最低系统：Android 7.0（API 24）
+- `compileSdk 35`，但 `targetSdk` 刻意压到 **28**：target 29+ 会禁止从应用私有目录执行
+  导入的工具链，而本地编译正依赖这一行为
 - 包名：`com.doge.ide.plus`
 
 ## 目录结构
@@ -21,9 +25,13 @@ android/
   app/
     build.gradle               签名、assets 同步（syncWebapp）
     src/main/AndroidManifest.xml
+    src/main/cpp/wasm_runner.c  WAMR JNI 执行入口（WASI stdin/stdout/stderr 与超时）
+    src/main/jniLibs/arm64-v8a/libiwasm.so
     src/main/java/com/doge/ide/
-      MainActivity.java        WebView、沉浸式全屏、返回键、外部链接
-       LocalServer.java         127.0.0.1 迷你 HTTP 服务
+      MainActivity.java        WebView、沉浸式全屏、返回键、资源包导入、SAF 项目目录
+      LocalServer.java         127.0.0.1 迷你 HTTP 服务
+      LocalCompiler.java       调用资源包里的 Clang / wasm-ld 编译并链接 WASI
+      NativeWasmRunner.java    加载 native 库，桥接 WAMR 执行 wasm
     src/main/res/...           主题、颜色、文案、启动图标、网络安全配置
 ```
 
@@ -54,8 +62,10 @@ pwsh -File android\build-apk.ps1 -InstallSdk
 4. 找 Gradle ≥ 8.9，没有就下载发行版到 `android/.gradle-dist`；
 5. 跑 `gradle -p android <Task>`，打印 APK 路径、大小和 `adb install` 命令。
 
-产物：`android/app/build/outputs/apk/release/app-release.apk`（约 0.36 MB，
-绝大部分体积是 `web/` 里的 CodeMirror 与字体；debug 包约 0.38 MB）。
+产物：`assembleRelease` 输出 `android/app/build/outputs/apk/release/app-release.apk`，
+`assembleDebug` 输出 `android/app/build/outputs/apk/debug/app-debug.apk`。本地运行版打进
+了 `libiwasm.so` 等 native 库，体积明显大于早期只含 `web/` 的云端壳；具体大小以
+`release/<版本>/RELEASE-NOTES.md` 记录为准。
 
 ## 正式签名
 
@@ -83,39 +93,38 @@ keytool -genkeypair -v -keystore android\doge-release.jks -alias doge `
 APK 里的 assets 就是仓库根目录的 `doge-ide.html`（构建时改名为 `index.html`）
 加 `web/**`，由 Gradle 的 `syncWebapp` 任务同步，改前端只需要重新跑一次构建，不必手动复制。
 
-云端沙盒偶尔会返回 `tool_unavailable`（容器创建进程/线程被 cgroup 限制，报文里是
-`Resource temporarily unavailable (os error 11)`）或 HTTP 429，页面会自动重试最多 5 次
-（退避 0.4s 递增）；单次请求还有硬超时（设置里的执行超时 + 30s），超时即中止重试，
-保证界面不会一直转，仍然失败才把原始错误显示到输出面板。
+页面请求的 `/api/v1/execution/run` 由同源的 `LocalServer` 交给 `LocalCompiler` 在本机执行：
+按 `entry` 定位入口文件，逐个源文件调用资源包里的 Clang 编成对象文件，再用 `wasm-ld`
+统一链接成 WASI 模块，最后交给 `NativeWasmRunner`（WAMR）在设备上运行，把 stdout /
+stderr 和退出码回传页面。资源包未导入时返回 `runtime_not_ready`（HTTP 503），页面据此
+提示先导入；编译、链接、运行都带超时，避免界面一直转。
 
 `MainActivity` 启动后拉起 `LocalServer`，然后让 WebView 打开
 `http://127.0.0.1:8787`（8787 被占用时自动退到随机端口）。这样做的好处：
 
 - 页面与接口**同源**，不触发 CORS，也不用给 `file://` 放开跨域；
 - `localStorage`、缓存、`fetch` 行为跟桌面版一致；
-- `/api/v1/execution/run` 由 `LocalServer` 用 `HttpURLConnection` 转发到云端沙盒，
-  `Authorization`（API Key）与页面里设置的自定义 endpoint 都会带过去。
-
-自定义 endpoint 通过同源请求头 `X-Doge-Upstream` 传给 `LocalServer`，
-只接受 `http`/`https` 且长度 ≤ 2048，否则回落到默认地址。
+- 执行发生在设备本地，页面不需要 API Key 或自定义 endpoint，接口路径与桌面版保持一致。
 
 `LocalServer` 只监听 `127.0.0.1`，8 个工作线程，HTTP/1.1 keep-alive，
 静态资源带 `max-age=86400`，API 响应 `no-store`。
 
-## 1.1 项目工作区（开发中）
+## 项目工作区
 
-`local-runtime` 的下一阶段已加入本地项目基础模型：WebView 使用 `localStorage`
-保存项目文件列表和内容，编辑器左侧显示文件列表，支持切换、新建和删除 C/C++
-源文件或头文件。Android 执行器会把头文件写入工作目录，逐个编译源文件，再统一
-链接为 WASI 程序。
+`local-runtime` 已加入本地项目基础模型：WebView 使用 `localStorage` 保存草稿文件列表
+和内容，编辑器左侧显示文件列表，支持切换、新建和删除 C/C++ 源文件或头文件。执行器
+会把全部项目文件写入工作目录，只编译 `.c/.cc/.cpp/.cxx`，头文件供 `#include` 使用，
+再统一链接为 WASI 程序。
 
-Android 版还支持通过 Storage Access Framework 的“打开项目”选择真实目录。目录
-访问权限会持久化，打开时递归读取 `.c/.cc/.cpp/.cxx/.h/.hh/.hpp/.hxx` 文件，
-“保存项目”会把当前文件内容写回该目录，不需要申请传统存储权限。
+Android 版支持通过 Storage Access Framework 的“打开项目”选择真实目录。目录访问权限
+会持久化，打开时先递归扫描目录里的 `.c/.cc/.cpp/.cxx/.h/.hh/.hpp/.hxx`，再按
+`.doge-project.json` 清单补充文件顺序和项目名（清单外新增的源文件/头文件也会被合并进
+来，不会重复）；清单缺失或损坏时直接以扫描结果降级打开，不会卡死。“保存项目”会把
+当前文件写回该目录，并删除上一份清单中已从项目移除的旧文件（清单损坏时无从判断归属，
+不执行删除，保存会重写清单），不需要申请传统存储权限。
 
-当前仍是轻量工作区：保存不会删除磁盘上已经移除的旧文件，尚未接入增量编译、
-CMake、clangd 或 Git 操作。默认项目包含 `main.c`、`math.c` 和 `math.h`，用于
-验证多文件编译链路。
+当前仍是轻量工作区：尚未接入增量编译、CMake、clangd 或 Git 操作。默认项目包含
+`main.c`、`math.c` 和 `math.h`，用于验证多文件编译链路。
 
 ## 平板适配要点（`doge-ide.html`）
 
@@ -130,13 +139,18 @@ CMake、clangd 或 Git 操作。默认项目包含 `main.c`、`math.c` 和 `math
 
 ## 已验证 / 未验证
 
+> 下面“整包构建”和 APK 校验的记录来自**原云端版**（release 产物 targetSdk 35、约
+> 0.36 MB），只说明当时的 WebView 壳能构建；本地运行时加入 native 库、资源包导入和
+> 项目目录工作区后，产物与校验项都已变化。local-runtime 的当前状态与验证见
+> `release/1.0.1/RELEASE-NOTES.md` 和 `report/IDE-GAP-REPORT-1.0.0.md`。
+
 **整包构建已在 Windows 上实际跑通**：`build-apk.ps1` 从零装好 SDK 并完成
 `assembleDebug` 与 `assembleRelease`（已知可用组合：JDK 21 Zulu 21.0.8 +
 Android SDK 35 + Gradle 8.11.1 + AGP 8.7.3，构建全程无本工程自身的弃用警告）。
 
-对 `app-release.apk`（372,571 字节）做过这些校验：
+对云端版 `app-release.apk`（372,571 字节）做过这些校验：
 
-- `aapt2 dump badging`：`com.doge.ide`、minSdk 24、targetSdk 35、横屏、
+- `aapt2 dump badging`：`com.doge.ide`、minSdk 24、targetSdk 35（云端版）、横屏、
   入口 `MainActivity`、label `Doge IDE`；
 - `apksigner verify`：v2 签名校验通过（未配置 keystore 时用的是 debug 证书）；
 - APK 内 20 个 assets 与仓库文件一一对应，且 `assets/index.html` 的 SHA-256
@@ -146,13 +160,11 @@ Android SDK 35 + Gradle 8.11.1 + AGP 8.7.3，构建全程无本工程自身的�
 `LocalServer` 另用 Android stub 编译（`javac` 0 error）并在普通 JVM 上跑通：
 
 - 静态资源：`/`、CSS、JS、WOFF2 的状态码与 MIME 正确，404 / 405 / 路径穿越正确；
-- 代理：POST 精确转发 body（长度逐字节一致）、`Authorization` 与 `X-Doge-Upstream` 正确、
-  chunked 请求可用、上游挂掉时返回 502 JSON；
 - keep-alive：单连接连续 6 个请求（POST + GET 混排）全部正常，`Connection: close` 正常；
 - 并发：8 个并发 POST 无串包。
 
-`proxy.py` / `proxy.mjs`（浏览器开发模式用的本地代理）也已同步支持
-`X-Doge-Upstream` 与 `Authorization`，行为和 Go / Android 壳一致。
+`proxy.py` / `proxy.mjs`（桌面浏览器开发模式用的本地代理，**不是 Android 路径**）
+保留 `X-Doge-Upstream` 与 `Authorization` 转发能力，行为和桌面 Go 壳一致。
 
 **尚未验证**：真机或模拟器上的实际运行（当前没有连接设备）、触摸手势手感、
 软键盘弹出时的布局表现，以及首次冷启动耗时。

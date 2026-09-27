@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 代码在云端沙盒执行，唯一的权限就是联网 -->
+    <!-- C/C++ 编译运行完全在应用私有目录内完成，不依赖云端执行服务。
+         INTERNET 权限保留以兼容站外文档跳转等场景；本地回环访问本身不需要该权限。 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <uses-feature

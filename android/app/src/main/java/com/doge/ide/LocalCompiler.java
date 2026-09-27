@@ -53,7 +53,7 @@ final class LocalCompiler {
                 File candidate = new File(toolchain, "bin/" + executable);
                 if (candidate.isFile()) candidate.setExecutable(true, false);
             }
-            File work = new File(filesDir, "runs");
+            File work = new File(new File(filesDir, "runs"), Long.toHexString(System.nanoTime()) + "-" + Thread.currentThread().getId());
             if (!work.isDirectory() && !work.mkdirs()) return error("runtime_error", "无法创建编译目录");
             File wasm = new File(work, "main.wasm");
             Files.deleteIfExists(wasm.toPath());

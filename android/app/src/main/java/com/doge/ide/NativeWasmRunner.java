@@ -9,5 +9,5 @@ final class NativeWasmRunner {
         System.loadLibrary("doge_wasm_jni");
     }
 
-    static native String run(byte[] wasm, byte[] stdin, int timeoutMs);
+    static synchronized native String run(byte[] wasm, byte[] stdin, int timeoutMs);
 }

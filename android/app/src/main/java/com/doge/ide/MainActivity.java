@@ -37,7 +37,9 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.json.JSONObject;
@@ -199,33 +201,36 @@ public class MainActivity extends Activity {
     }
 
     private JSONObject readProject(Uri tree) throws Exception {
+        LinkedHashMap<String, String> scanned = new LinkedHashMap<>();
+        scanSourceFiles(tree, DocumentsContract.getTreeDocumentId(tree), "", scanned);
         JSONObject manifest = readManifest(tree);
+        String name = manifest == null ? null : manifest.optString("name", "");
+        JSONArray files = new JSONArray();
+        java.util.HashSet<String> added = new java.util.HashSet<>();
         if (manifest != null) {
-            JSONArray files = manifest.optJSONArray("files");
-            if (files == null) throw new IOException("项目清单文件无效");
-            JSONObject project = new JSONObject();
-            project.put("name", manifest.optString("name", queryDisplayName(tree)));
-            JSONArray loaded = new JSONArray();
-            for (int i = 0; i < files.length(); i++) {
-                String path = files.optString(i, "");
-                if (!isSafeProjectPath(path) || PROJECT_MANIFEST.equals(path)) continue;
-                String id = findDocumentByPath(tree, path);
-                if (id == null || !isSourceFile(path)) continue;
-                Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
-                loaded.put(new JSONObject().put("path", path).put("code", readText(fileUri)));
+            JSONArray listed = manifest.optJSONArray("files");
+            if (listed != null) {
+                for (int i = 0; i < listed.length(); i++) {
+                    String path = listed.optString(i, "");
+                    if (!isSafeProjectPath(path) || PROJECT_MANIFEST.equals(path) || added.contains(path)) continue;
+                    String code = scanned.get(path);
+                    if (code == null) continue;
+                    files.put(new JSONObject().put("path", path).put("code", code));
+                    added.add(path);
+                }
             }
-            project.put("files", loaded);
-            if (loaded.length() > 0) return project;
+        }
+        for (Map.Entry<String, String> entry : scanned.entrySet()) {
+            if (added.contains(entry.getKey())) continue;
+            files.put(new JSONObject().put("path", entry.getKey()).put("code", entry.getValue()));
         }
         JSONObject project = new JSONObject();
-        project.put("name", queryDisplayName(tree));
-        JSONArray files = new JSONArray();
-        readDirectory(tree, DocumentsContract.getTreeDocumentId(tree), "", files);
+        project.put("name", name == null || name.isEmpty() ? queryDisplayName(tree) : name);
         project.put("files", files);
         return project;
     }
 
-    private void readDirectory(Uri tree, String documentId, String prefix, JSONArray files) throws Exception {
+    private void scanSourceFiles(Uri tree, String documentId, String prefix, LinkedHashMap<String, String> files) throws Exception {
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId);
         String[] projection = {DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                 DocumentsContract.Document.COLUMN_MIME_TYPE};
@@ -238,11 +243,11 @@ public class MainActivity extends Activity {
                 if (!isSafeName(name)) continue;
                 String path = prefix.isEmpty() ? name : prefix + "/" + name;
                 if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
-                    readDirectory(tree, id, path, files);
+                    scanSourceFiles(tree, id, path, files);
                 } else if (isSourceFile(name)) {
                     Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
                     String code = readText(fileUri);
-                    files.put(new JSONObject().put("path", path).put("code", code));
+                    files.put(path, code);
                 }
             }
         }
@@ -312,8 +317,10 @@ public class MainActivity extends Activity {
         if (id == null) return null;
         try {
             return new JSONObject(readText(DocumentsContract.buildDocumentUriUsingTree(tree, id)));
-        } catch (org.json.JSONException e) {
-            throw new IOException("项目清单文件无效", e);
+        } catch (org.json.JSONException | IOException e) {
+            // 清单损坏时降级为目录扫描，不阻塞打开/保存
+            Log.w(TAG, "project manifest unreadable, falling back to directory scan", e);
+            return null;
         }
     }
 
