@@ -46,6 +46,7 @@ final class LocalServer implements Closeable {
     private final AssetManager assets;
     private final LocalCompiler compiler;
     private final TaskRegistry taskRegistry;
+    private final ClangdService clangd;
     private ServerSocket serverSocket;
     private ExecutorService workers;
     private volatile boolean running;
@@ -55,6 +56,7 @@ final class LocalServer implements Closeable {
         this.assets = context.getApplicationContext().getAssets();
         this.compiler = new LocalCompiler(context);
         this.taskRegistry = new TaskRegistry(compiler);
+        this.clangd = new ClangdService(context);
     }
 
     /** 启动服务，返回页面基地址（如 http://127.0.0.1:8787）。 */
@@ -95,6 +97,7 @@ final class LocalServer implements Closeable {
     public synchronized void close() {
         running = false;
         taskRegistry.close();
+        clangd.close();
         if (serverSocket != null) {
             try {
                 serverSocket.close();
@@ -323,6 +326,11 @@ final class LocalServer implements Closeable {
     // ---------------------------------------------------------------- 路由
 
     private boolean respond(OutputStream out, Request req) throws IOException {
+        if (req.path.startsWith("/api/v1/intel/")) {
+            if (!"POST".equals(req.method)) return sendBytes(out, req, 405, "text/plain", "method not allowed".getBytes(StandardCharsets.UTF_8));
+            try { JSONObject body = new JSONObject(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8)); String method = req.path.endsWith("/completion") ? "textDocument/completion" : req.path.endsWith("/definition") ? "textDocument/definition" : req.path.endsWith("/diagnostics") ? "textDocument/diagnostic" : "textDocument/documentSymbol"; JSONObject result = clangd.request(body, method); return sendBytes(out, req, 200, "application/json; charset=utf-8", result.toString().getBytes(StandardCharsets.UTF_8)); }
+            catch (Exception e) { return sendBytes(out, req, 503, "application/json; charset=utf-8", ("{\"error\":" + JSONObject.quote(e.getMessage()) + "}").getBytes(StandardCharsets.UTF_8)); }
+        }
         if (TASKS_PATH.equals(req.path)) {
             if ("POST".equals(req.method)) {
                 try {

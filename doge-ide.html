@@ -756,6 +756,21 @@ function dogeCompletions(cm) {
   return { list, from: CodeMirror.Pos(cur.line, start + 1), to: cur };
 }
 
+function clangdCompletions(cm) {
+  const cur = cm.getCursor();
+  const fallback = () => dogeCompletions(cm);
+  if (!(window.DogeNative && DogeNative.isToolchainReady)) return fallback();
+  const body = { path: currentFilePath, line: cur.line, column: cur.ch, files: project.files.map(file => ({ path:file.path, code:file.code })) };
+  return fetch('/api/v1/intel/completion', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+    .then(response => response.ok ? response.json() : Promise.reject(new Error('clangd unavailable')))
+    .then(result => {
+      const items = Array.isArray(result.items) ? result.items : [];
+      const list = items.map(item => typeof item === 'string' ? item : (item.label || item.insertText || '')).filter(Boolean);
+      return list.length ? { list, from: CodeMirror.Pos(cur.line, Math.max(0, cur.ch - currentCompletionPrefix(cm).length)), to: cur } : fallback();
+    }).catch(fallback);
+}
+function currentCompletionPrefix(cm) { const cur=cm.getCursor(), line=cm.getLine(cur.line).slice(0,cur.ch); const match=line.match(/[A-Za-z_][A-Za-z0-9_]*$/); return match ? match[0] : ''; }
+
 // Auto-trigger completion while typing
 function bindAutoComplete() {
   let timer = null;
@@ -1163,7 +1178,7 @@ function initEditor() {
     lineWrapping: true,
     dragDrop: false,
     viewportMargin: 30,
-    hintOptions: { hint: dogeCompletions, completeSingle: false },
+     hintOptions: { hint: clangdCompletions, completeSingle: false },
     extraKeys: {
       'Ctrl-Enter': () => runCode(),
       'Cmd-Enter': () => runCode(),
@@ -1183,6 +1198,7 @@ function initEditor() {
     if (file) file.code = editor.getValue();
     scheduleProjectSave();
     scheduleLint();
+    clearTimeout(editor._clangdTimer); editor._clangdTimer = setTimeout(requestClangdDiagnostics, 700);
     scheduleBpSave();
   });
   editor.on('gutterClick', (cm, line, gutter) => {
