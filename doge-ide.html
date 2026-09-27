@@ -51,12 +51,15 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 /* Main layout */
 .main{display:flex;flex:1;overflow:hidden}
 .project-panel{width:190px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.project-panel.collapsed{width:0!important;border-right:0;overflow:hidden}.project-panel.collapsed>*{display:none}
 .project-head{display:flex;align-items:center;justify-content:space-between;padding:9px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--fg2);font-weight:600}
 .project-actions{display:flex;gap:4px}.project-actions button{width:26px;height:26px;padding:0;background:var(--bg3);color:var(--fg2);border:1px solid var(--border);border-radius:4px;cursor:pointer}
 .project-actions button:hover{color:var(--accent);border-color:var(--accent)}
 .project-actions button.wide{width:auto;padding:0 7px;font-size:11px}
 .project-list{flex:1;overflow:auto;padding:5px}.project-file{display:flex;align-items:center;gap:7px;width:100%;padding:8px 7px;background:transparent;border:0;color:var(--fg2);text-align:left;border-radius:4px;cursor:pointer;font:12px var(--font-sans)}
 .project-file:hover{background:var(--bg3)}.project-file.active{background:var(--bg4);color:var(--accent)}.project-file .file-dot{width:7px;height:7px;border-radius:50%;background:var(--fg3);flex-shrink:0}.project-file.active .file-dot{background:var(--accent)}
+.project-resize{width:5px;cursor:col-resize;background:transparent;flex-shrink:0;touch-action:none}.project-resize:hover,.project-resize.active{background:var(--accent)}
+.project-toggle{background:var(--bg3);border:1px solid var(--border);color:var(--fg2);padding:6px 10px;border-radius:var(--radius);cursor:pointer;font-size:12px}
 
 /* Editor panel */
 .editor-panel{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border)}
@@ -295,7 +298,7 @@ body.kb-open .stdin-section{border-top:none}
 
 /* 窄窗口（分屏 / 竖屏）：编辑器与输出上下堆叠 */
 @media (max-width:900px){
-   .main{flex-direction:column}.project-panel{width:auto;height:128px;border-right:none;border-bottom:1px solid var(--border)}.project-list{display:flex;gap:4px}.project-file{width:auto;min-width:120px}
+   .main{flex-direction:column}.project-panel{width:auto;height:128px;border-right:none;border-bottom:1px solid var(--border)}.project-resize{display:none}.project-list{display:flex;gap:4px}.project-file{width:auto;min-width:120px}
   .editor-panel{border-right:none;border-bottom:1px solid var(--border)}
   .output-panel{width:auto!important;min-width:0;height:42%;flex-shrink:0}
   .resize-handle{display:none}
@@ -315,6 +318,7 @@ body.kb-open .stdin-section{border-top:none}
     <span>Doge IDE+</span>
   </div>
   <div class="header-right">
+    <button class="project-toggle" id="projectToggle" onclick="toggleProjectPanel()" title="Show or hide project panel">Files</button>
     <button class="toolchain-btn" onclick="pickToolchain()" title="导入本地 C/C++ 运行库">导入运行库</button>
     <button class="settings-btn" onclick="toggleSettings()" title="Settings">⚙</button>
     <span class="hotkey-hint">Ctrl+Enter 运行</span>
@@ -333,9 +337,10 @@ body.kb-open .stdin-section{border-top:none}
 <!-- Main -->
 <div class="main">
   <aside class="project-panel">
-    <div class="project-head"><span id="projectName">Project</span><span class="project-actions"><button class="wide" onclick="openProject()" title="Open project folder">Open</button><button class="wide" onclick="saveProjectToDisk()" title="Save project folder">Save</button><button onclick="newProjectFile()" title="New file">+</button><button onclick="deleteProjectFile()" title="Delete file">−</button></span></div>
+    <div class="project-head"><span id="projectName">Project</span><span class="project-actions"><button class="wide" onclick="openProject()" title="Open project folder">Open</button><button class="wide" onclick="saveProjectToDisk()" title="Save project folder">Save</button><button onclick="newProjectFile()" title="New file">+</button><button onclick="deleteProjectFile()" title="Delete file">−</button><button onclick="toggleProjectPanel()" title="Collapse project panel">‹</button></span></div>
     <div class="project-list" id="projectList"></div>
   </aside>
+  <div class="project-resize" id="projectResize" title="Resize project panel"></div>
   <!-- Editor -->
   <div class="editor-panel" id="editorPanel">
     <div class="tabs">
@@ -478,6 +483,7 @@ let editor;
 let isRunning = false;
 let project = { name: 'Untitled Project', files: [] };
 let currentFilePath = 'main.c';
+let pendingDiskSave = false;
 let outputData = { stdout:'', stderr:'', info:'' };
 let currentOutputTab = 'stdout';
 let breakpoints = {};
@@ -1096,6 +1102,7 @@ function init() {
   initTabletUX();
   loadProject();
   renderProjectFiles();
+  initProjectLayout();
   buildTabs();
   initEditor();
   loadSavedState();
@@ -1227,19 +1234,30 @@ function saveProjectToDisk() {
     return;
   }
   const ok = DogeNative.saveProject(JSON.stringify(project));
-  showToast(ok ? '项目已保存到目录' : '请先打开项目目录', ok ? 'success' : 'info');
+  if (ok) {
+    pendingDiskSave = false;
+    showToast('项目已保存到目录', 'success');
+  } else {
+    pendingDiskSave = true;
+    showToast('请选择项目目录，选择完成后会自动保存', 'info');
+    openProject();
+  }
 }
 window.projectOpened = function(serialized) {
   try {
     const loaded = typeof serialized === 'string' ? JSON.parse(serialized) : serialized;
     if (!loaded || !Array.isArray(loaded.files) || !loaded.files.length) throw new Error('项目没有可编辑文件');
     project = loaded;
+    if (!Array.isArray(project.files) || !project.files.length) {
+      project.files = defaultProjectFiles();
+    }
     const nextPath = project.files[0].path;
     currentFilePath = '';
     saveProject();
     if (editor) switchProjectFile(nextPath);
     document.getElementById('projectName').textContent = project.name || 'Project';
     showToast('项目已打开', 'success');
+    if (pendingDiskSave) setTimeout(saveProjectToDisk, 0);
   } catch (e) { projectError(e.message); }
 };
 window.projectError = function(message) { showToast(message || '项目操作失败', 'error'); };
@@ -1256,6 +1274,48 @@ function renderProjectFiles() {
     button.onclick = () => switchProjectFile(file.path);
     list.appendChild(button);
   });
+}
+function defaultProjectFiles() {
+  return [
+    { path: 'main.c', code: getLang('c').sample },
+    { path: 'math.c', code: '#include "math.h"\n\nint add_numbers(int a, int b) { return a + b; }\n' },
+    { path: 'math.h', code: '#pragma once\nint add_numbers(int a, int b);\n' }
+  ];
+}
+function toggleProjectPanel() {
+  const panel = document.querySelector('.project-panel');
+  if (!panel) return;
+  const collapsed = panel.classList.toggle('collapsed');
+  try { localStorage.setItem('doge-ide-project-collapsed', collapsed ? '1' : '0'); } catch (e) {}
+  if (editor) setTimeout(() => editor.refresh(), 0);
+}
+function initProjectLayout() {
+  const panel = document.querySelector('.project-panel');
+  const resize = document.getElementById('projectResize');
+  if (!panel || !resize) return;
+  try {
+    const width = parseInt(localStorage.getItem('doge-ide-project-width') || '190', 10);
+    panel.style.width = Math.max(150, Math.min(420, width)) + 'px';
+    if (localStorage.getItem('doge-ide-project-collapsed') === '1') panel.classList.add('collapsed');
+  } catch (e) {}
+  let dragging = false;
+  resize.addEventListener('pointerdown', (event) => {
+    if (panel.classList.contains('collapsed')) return;
+    dragging = true; resize.classList.add('active'); resize.setPointerCapture(event.pointerId);
+  });
+  resize.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    const width = Math.max(150, Math.min(420, event.clientX));
+    panel.style.width = width + 'px';
+  });
+  const stop = (event) => {
+    if (!dragging) return;
+    dragging = false; resize.classList.remove('active');
+    try { resize.releasePointerCapture(event.pointerId); } catch (e) {}
+    try { localStorage.setItem('doge-ide-project-width', String(panel.offsetWidth)); } catch (e) {}
+    if (editor) editor.refresh();
+  };
+  resize.addEventListener('pointerup', stop); resize.addEventListener('pointercancel', stop);
 }
 function switchProjectFile(path) {
   if (isRunning || (path === currentFilePath && editor)) return;

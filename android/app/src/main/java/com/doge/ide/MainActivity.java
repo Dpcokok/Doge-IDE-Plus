@@ -222,7 +222,6 @@ public class MainActivity extends Activity {
         JSONArray files = new JSONArray();
         readDirectory(tree, DocumentsContract.getTreeDocumentId(tree), "", files);
         project.put("files", files);
-        if (files.length() == 0) throw new IOException("项目目录中没有 C/C++ 文件");
         return project;
     }
 
