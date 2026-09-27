@@ -394,6 +394,24 @@ Android 平板上可以先实现本地 Git 状态和 diff 查看，再决定是�
 
 下一步在任务 ID 基础上增加交互式 stdin、增量 stdout/stderr、任务面板和终端视图。
 
+## 1.0.2 后续进展
+
+已完成：
+
+- 任务历史 Tasks 标签；
+- 编译错误 `file:line:column` 点击跳转到项目文件和编辑器位置；
+- 依赖包 ZIP 导入基础能力；
+- 依赖包安全解压、名称/版本 registry 和私有目录安装；
+- 依赖包删除基础接口；
+- Build Profile 可接入依赖 include 路径；
+- 资源包导入、项目导入和依赖导入继续使用私有目录，保持离线运行。
+
+尚未完成：
+
+- native 交互式 stdin 保持打开、任务 input/output 游标和终端 UI；
+- clangd 项目镜像、compile_commands.json 和 LSP 通道；
+- 真实 C/C++ 调试器。当前资源包没有 lldb/lldb-server，现有 Debug 仍是隐藏的插桩回放能力，不能称为真实调试。
+
 ## 1.0.2 第一阶段：工程配置基础
 
 已开始实现 1.0.2 的共同工程基础：

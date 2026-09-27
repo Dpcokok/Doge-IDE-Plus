@@ -57,6 +57,7 @@ public class MainActivity extends Activity {
     private static final long BACK_GRACE_MS = 1200L;
     private static final int PICK_TOOLCHAIN = 42;
     private static final int PICK_PROJECT = 43;
+    private static final int PICK_DEPENDENCY = 44;
     private static final int MAX_PROJECT_FILE = 2 * 1024 * 1024;
     private static final long MAX_TOOLCHAIN_BYTES = 1024L * 1024 * 1024;
     private static final int MAX_TOOLCHAIN_ENTRIES = 100000;
@@ -64,6 +65,7 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private LocalServer server;
+    private DependencyManager dependencyManager;
     private boolean debug;
     private long lastBackAt;
 
@@ -83,6 +85,7 @@ public class MainActivity extends Activity {
         }
 
         server = new LocalServer(this);
+        dependencyManager = new DependencyManager(this);
         String base;
         try {
             base = server.start();
@@ -135,6 +138,12 @@ public class MainActivity extends Activity {
             return getPreferences(MODE_PRIVATE).contains("project_tree_uri");
         }
 
+        @JavascriptInterface public void pickDependency(String name, String version) {
+            runOnUiThread(() -> { getPreferences(MODE_PRIVATE).edit().putString("dependency_name", name).putString("dependency_version", version).apply(); Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT); intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType("application/zip"); startActivityForResult(intent, PICK_DEPENDENCY); });
+        }
+        @JavascriptInterface public String listDependencies() { try { return dependencyManager.list().toString(); } catch (Exception e) { return "{\"packages\":[]}"; } }
+        @JavascriptInterface public boolean removeDependency(String name, String version) { try { return dependencyManager.remove(name, version); } catch (Exception e) { return false; } }
+
         @JavascriptInterface
         public void openProject() {
             runOnUiThread(() -> {
@@ -183,6 +192,12 @@ public class MainActivity extends Activity {
                     notifyProjectError(e.getMessage());
                 }
             }, "doge-project-open").start();
+            return;
+        }
+        if (requestCode == PICK_DEPENDENCY) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+            Uri uri = data.getData(); String name = getPreferences(MODE_PRIVATE).getString("dependency_name", "dependency"); String version = getPreferences(MODE_PRIVATE).getString("dependency_version", "1.0.0");
+            new Thread(() -> { try { dependencyManager.install(uri, name, version); runOnUiThread(() -> web.evaluateJavascript("window.dependencyImported && window.dependencyImported(true,'')", null)); } catch (Exception e) { runOnUiThread(() -> web.evaluateJavascript("window.dependencyImported && window.dependencyImported(false," + JSONObject.quote(e.getMessage()) + ")", null)); } }, "doge-dependency-import").start();
             return;
         }
         if (requestCode != PICK_TOOLCHAIN || resultCode != RESULT_OK || data == null || data.getData() == null) return;

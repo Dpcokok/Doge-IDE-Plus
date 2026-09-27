@@ -146,9 +146,14 @@ final class LocalCompiler {
         if (defines != null) for (int i = 0; i < defines.length(); i++) {
             String value = defines.optString(i, ""); if (value.matches("[A-Za-z_][A-Za-z0-9_]*(=.*)?")) command.add("-D" + value);
         }
-        JSONArray includes = build.optJSONArray("include_paths");
+            JSONArray includes = build.optJSONArray("include_paths");
         if (includes != null) for (int i = 0; i < includes.length(); i++) {
             String path = safeRelative(includes.optString(i, "")); if (path != null) command.add("-I" + new File(work, path).getAbsolutePath());
+        }
+        JSONArray dependencies = build.optJSONArray("dependencies");
+        if (dependencies != null) for (int i = 0; i < dependencies.length(); i++) {
+            JSONObject dep = dependencies.optJSONObject(i); if (dep == null) continue;
+            String path = safeRelative(dep.optString("path", "")); if (path != null) command.add("-I" + new File(work, path + "/include").getAbsolutePath());
         }
     }
 

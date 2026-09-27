@@ -418,6 +418,7 @@ body.kb-open .stdin-section{border-top:none}
     <input type="text" id="includesInput" placeholder="include 路径：include,third_party/include">
     <input type="text" id="librariesInput" placeholder="链接库：m,custom">
     <input type="text" id="dependenciesInput" placeholder="依赖记录：name@version,name@version">
+    <button type="button" onclick="pickDependencyPackage()">导入离线依赖包</button>
     <div class="hint">配置会保存到 .doge-project.json，并用于下一次构建</div>
   </div>
   <div class="settings-actions">
@@ -2269,6 +2270,13 @@ function pickToolchain() {
   if (window.DogeNative && DogeNative.pickToolchain) DogeNative.pickToolchain();
   else showToast('请在 Doge IDE+ APK 中导入资源包', 'info');
 }
+function pickDependencyPackage() {
+  if (!(window.DogeNative && DogeNative.pickDependency)) { showToast('请在 Doge IDE+ APK 中导入依赖包', 'info'); return; }
+  dogeInput('依赖名称', '输入名称，例如 fmt', 'dependency', (name) => {
+    dogeInput('依赖版本', '输入版本，例如 1.0.0', '1.0.0', (version) => DogeNative.pickDependency(name.trim(), version.trim()));
+  });
+}
+window.dependencyImported = function(ok, message) { showToast(ok ? '依赖包导入成功' : (message || '依赖包导入失败'), ok ? 'success' : 'error'); };
 
 window.toolchainImported = function(ok, message) {
   document.getElementById('importProgress').classList.remove('show');
