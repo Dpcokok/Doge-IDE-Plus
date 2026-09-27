@@ -218,6 +218,7 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .toast.info{background:var(--bg4);color:var(--fg);border:1px solid var(--border)}
 .toast.success{background:#1a3a2a;color:var(--green);border:1px solid #2d5a3d}
 .toast.error{background:#3a1a1a;color:var(--red);border:1px solid #5a2d2d}
+.import-progress{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:none;align-items:center;justify-content:center}.import-progress.show{display:flex}.import-progress-box{width:min(420px,80vw);background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:20px;box-shadow:0 12px 36px var(--shadow)}.import-progress-title{font-size:14px;color:var(--accent);margin-bottom:12px}.import-progress-track{height:8px;background:var(--bg);border-radius:4px;overflow:hidden}.import-progress-bar{height:100%;width:0;background:var(--accent);transition:width .2s}.import-progress-message{margin-top:9px;font-size:12px;color:var(--fg2)}
 
 /* Settings */
 .settings-btn{background:none;border:1px solid var(--border);color:var(--fg3);width:32px;height:32px;border-radius:var(--radius);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .15s}
@@ -414,6 +415,7 @@ body.kb-open .stdin-section{border-top:none}
 
 <!-- Toast -->
 <div class="toast" id="toast"></div>
+<div class="import-progress" id="importProgress"><div class="import-progress-box"><div class="import-progress-title">导入本地运行库</div><div class="import-progress-track"><div class="import-progress-bar" id="importProgressBar"></div></div><div class="import-progress-message" id="importProgressMessage">准备中...</div></div></div>
 
 <!-- Shortcut Modal -->
 <div class="modal-overlay" id="shortcutModal">
@@ -2124,9 +2126,19 @@ function pickToolchain() {
 }
 
 window.toolchainImported = function(ok, message) {
+  document.getElementById('importProgress').classList.remove('show');
   const hint = document.getElementById('toolchainHint');
   if (ok) { hint.textContent = '资源包已导入，可离线准备本地运行'; showToast('资源包导入成功', 'success'); }
   else { hint.textContent = message || '资源包导入失败'; showToast('资源包导入失败', 'error'); }
+};
+window.toolchainProgress = function(percent, message) {
+  const panel = document.getElementById('importProgress');
+  const bar = document.getElementById('importProgressBar');
+  const text = document.getElementById('importProgressMessage');
+  if (!panel || !bar || !text) return;
+  panel.classList.add('show');
+  bar.style.width = Math.max(0, Math.min(100, Number(percent) || 0)) + '%';
+  text.textContent = message || '处理中...';
 };
 
 function getSetting(key, defaultVal) {

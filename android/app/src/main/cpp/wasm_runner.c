@@ -36,6 +36,7 @@ static pthread_mutex_t active_lock = PTHREAD_MUTEX_INITIALIZER;
 static wasm_module_inst_t active_instance;
 static unsigned active_run_id;
 static bool active_done = true;
+static bool terminate_in_progress;
 static atomic_uint run_sequence;
 static atomic_uint cancel_upto;
 static atomic_uint timeout_run;
@@ -44,6 +45,22 @@ static void init_runtime(void) { signal(SIGPIPE, SIG_IGN); wasm_runtime_init(); 
 static bool run_was_canceled(unsigned id) {
     unsigned canceled = atomic_load_explicit(&cancel_upto, memory_order_acquire);
     return id != 0 && (int)(canceled - id) >= 0;
+}
+
+static void terminate_active(unsigned run_id) {
+    wasm_module_inst_t target = NULL;
+    pthread_mutex_lock(&active_lock);
+    if (!terminate_in_progress && !active_done && active_instance != NULL && active_run_id == run_id) {
+        terminate_in_progress = true;
+        target = active_instance;
+    }
+    pthread_mutex_unlock(&active_lock);
+    if (target != NULL) wasm_runtime_terminate(target);
+    if (target != NULL) {
+        pthread_mutex_lock(&active_lock);
+        terminate_in_progress = false;
+        pthread_mutex_unlock(&active_lock);
+    }
 }
 
 static void *read_pipe(void *arg) {
@@ -96,11 +113,12 @@ static void *watchdog_thread(void *arg) {
         remaining -= 10;
     }
     pthread_mutex_lock(&active_lock);
-    if (!active_done && active_instance != NULL && active_run_id == watchdog->run_id && !run_was_canceled(watchdog->run_id)) {
-        atomic_store_explicit(&timeout_run, watchdog->run_id, memory_order_release);
-        wasm_runtime_terminate(active_instance);
-    }
+    bool should_terminate = !active_done && active_instance != NULL && active_run_id == watchdog->run_id && !run_was_canceled(watchdog->run_id);
     pthread_mutex_unlock(&active_lock);
+    if (should_terminate) {
+        atomic_store_explicit(&timeout_run, watchdog->run_id, memory_order_release);
+        terminate_active(watchdog->run_id);
+    }
     return NULL;
 }
 
@@ -224,6 +242,13 @@ Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
     active_done = true;
     active_instance = NULL;
     pthread_mutex_unlock(&active_lock);
+    while (true) {
+        pthread_mutex_lock(&active_lock);
+        bool terminating = terminate_in_progress;
+        pthread_mutex_unlock(&active_lock);
+        if (!terminating) break;
+        usleep(1000);
+    }
     pthread_join(watchdog_thread_id, NULL);
     close(out_pipe[1]); close(err_pipe[1]);
     pthread_join(stdout_thread, NULL); pthread_join(stderr_thread, NULL);
@@ -244,6 +269,7 @@ Java_com_doge_ide_NativeWasmRunner_cancel(JNIEnv *env, jclass unused) {
     unsigned latest = atomic_load_explicit(&run_sequence, memory_order_acquire);
     atomic_store_explicit(&cancel_upto, latest, memory_order_release);
     pthread_mutex_lock(&active_lock);
-    if (active_instance != NULL && !active_done) wasm_runtime_terminate(active_instance);
+    bool can_terminate = active_instance != NULL && !active_done;
     pthread_mutex_unlock(&active_lock);
+    if (can_terminate) terminate_active(active_run_id);
 }

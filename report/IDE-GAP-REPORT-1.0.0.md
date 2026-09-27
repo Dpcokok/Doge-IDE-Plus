@@ -355,3 +355,9 @@ Android 平板上可以先实现本地 Git 状态和 diff 查看，再决定是�
 - 前端增加 canceled 状态显示。
 
 仍需真机压力验证的边界：大 stdin、1 MiB 以上输出截断标记、连续 timeout/cancel 竞态、Activity 退出时的 native 清理、多个并发 HTTP 请求，以及取消时 clang 子进程的完整回收。当前取消语义是取消所有已开始的本地任务，适合单用户本地 IDE，不是多客户端任务管理模型。
+
+## 卡死修复与资源导入进度
+
+针对实机反馈的“应用彻底卡死”，本轮修复了 native 终止路径：`wasm_runtime_terminate()` 不再在 active mutex 内调用，避免 WAMR 终止过程与执行线程清理互相等待；执行线程会在撤销 active instance 后等待正在进行的终止调用结束，再执行实例销毁。资源导入新增解压进度回调和遮罩式进度条，显示读取、解压和完成状态。
+
+本轮构建验证通过：Gradle `assembleDebug`、前端 `node --check`、`git diff --check`。当前环境未提供可调用的 `adb`，因此尚未重新安装到平板执行真实卡死回归；安装后应优先验证普通运行、超时、点击取消、返回退出 Activity，以及资源包导入进度显示。

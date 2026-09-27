@@ -402,6 +402,9 @@ public class MainActivity extends Activity {
         boolean ok = false;
         try {
             if (staging.getUsableSpace() < MAX_TOOLCHAIN_BYTES) throw new IOException("设备剩余空间不足");
+            long compressedSize = querySize(uri);
+            long progressBytes = 0;
+            notifyToolchainProgress(1, "正在读取资源包...");
             try (InputStream raw = getContentResolver().openInputStream(uri);
                  ZipInputStream zip = new ZipInputStream(raw)) {
                 if (raw == null) throw new IOException("无法读取资源包");
@@ -422,8 +425,13 @@ public class MainActivity extends Activity {
                         int n; while ((n = zip.read(buffer)) >= 0) {
                             if (n > 0) {
                                 totalBytes += n;
+                                progressBytes += n;
                                 if (totalBytes > MAX_TOOLCHAIN_BYTES) throw new IOException("资源包解压后过大");
                                 target.write(buffer, 0, n);
+                                if (compressedSize > 0 && progressBytes % (1024 * 1024) < n) {
+                                    int percent = (int) Math.min(95, Math.max(1, progressBytes * 90 / compressedSize + 1));
+                                    notifyToolchainProgress(percent, "正在解压资源包...");
+                                }
                             }
                         }
                     }
@@ -448,9 +456,22 @@ public class MainActivity extends Activity {
             deleteTree(root);
             if (!staging.renameTo(root)) throw new IOException("无法安装资源包");
             ok = true;
+            notifyToolchainProgress(100, "资源包导入完成");
         } finally {
             if (!ok) deleteTree(staging);
         }
+    }
+
+    private long querySize(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
+            return cursor != null && cursor.moveToFirst() && !cursor.isNull(0) ? cursor.getLong(0) : -1;
+        } catch (Exception ignored) { return -1; }
+    }
+
+    private void notifyToolchainProgress(int percent, String message) {
+        runOnUiThread(() -> {
+            if (web != null) web.evaluateJavascript("window.toolchainProgress && window.toolchainProgress(" + percent + "," + JSONObject.quote(message) + ")", null);
+        });
     }
 
     private static void deleteTree(File file) {
