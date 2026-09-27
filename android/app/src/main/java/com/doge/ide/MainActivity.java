@@ -56,6 +56,7 @@ public class MainActivity extends Activity {
     private static final int PICK_TOOLCHAIN = 42;
     private static final int PICK_PROJECT = 43;
     private static final int MAX_PROJECT_FILE = 2 * 1024 * 1024;
+    private static final String PROJECT_MANIFEST = ".doge-project.json";
 
     private WebView web;
     private LocalServer server;
@@ -198,6 +199,24 @@ public class MainActivity extends Activity {
     }
 
     private JSONObject readProject(Uri tree) throws Exception {
+        JSONObject manifest = readManifest(tree);
+        if (manifest != null) {
+            JSONArray files = manifest.optJSONArray("files");
+            if (files == null) throw new IOException("项目清单文件无效");
+            JSONObject project = new JSONObject();
+            project.put("name", manifest.optString("name", queryDisplayName(tree)));
+            JSONArray loaded = new JSONArray();
+            for (int i = 0; i < files.length(); i++) {
+                String path = files.optString(i, "");
+                if (!isSafeProjectPath(path) || PROJECT_MANIFEST.equals(path)) continue;
+                String id = findDocumentByPath(tree, path);
+                if (id == null || !isSourceFile(path)) continue;
+                Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
+                loaded.put(new JSONObject().put("path", path).put("code", readText(fileUri)));
+            }
+            project.put("files", loaded);
+            if (loaded.length() > 0) return project;
+        }
         JSONObject project = new JSONObject();
         project.put("name", queryDisplayName(tree));
         JSONArray files = new JSONArray();
@@ -248,10 +267,14 @@ public class MainActivity extends Activity {
         JSONArray files = project.optJSONArray("files");
         if (files == null) throw new IOException("项目文件列表无效");
         String rootId = DocumentsContract.getTreeDocumentId(tree);
+        JSONObject previousManifest = readManifest(tree);
+        JSONArray previousFiles = previousManifest == null ? new JSONArray() : previousManifest.optJSONArray("files");
+        java.util.HashSet<String> currentPaths = new java.util.HashSet<>();
         for (int i = 0; i < files.length(); i++) {
             JSONObject file = files.optJSONObject(i); if (file == null) continue;
             String path = file.optString("path", "").replace('\\', '/');
-            if (!path.matches("[A-Za-z0-9._/-]+") || path.startsWith("/") || path.contains("..")) throw new IOException("文件路径无效: " + path);
+            if (!isSafeProjectPath(path) || PROJECT_MANIFEST.equals(path)) throw new IOException("文件路径无效: " + path);
+            currentPaths.add(path);
             String[] parts = path.split("/");
             String parentId = rootId;
             for (int p = 0; p < parts.length - 1; p++) parentId = findOrCreateDirectory(tree, parentId, parts[p]);
@@ -270,6 +293,55 @@ public class MainActivity extends Activity {
                 output.write(data);
             }
         }
+        if (previousFiles != null) {
+            for (int i = 0; i < previousFiles.length(); i++) {
+                String oldPath = previousFiles.optString(i, "");
+                if (!isSafeProjectPath(oldPath) || currentPaths.contains(oldPath)) continue;
+                String oldId = findDocumentByPath(tree, oldPath);
+                if (oldId != null) DocumentsContract.deleteDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, oldId));
+            }
+        }
+        JSONObject manifest = new JSONObject();
+        manifest.put("format", 1);
+        manifest.put("name", project.optString("name", "Project"));
+        manifest.put("files", new JSONArray(currentPaths));
+        writeTextFile(tree, rootId, PROJECT_MANIFEST, manifest.toString(2));
+    }
+
+    private JSONObject readManifest(Uri tree) throws Exception {
+        String id = findChild(tree, DocumentsContract.getTreeDocumentId(tree), PROJECT_MANIFEST);
+        if (id == null) return null;
+        try {
+            return new JSONObject(readText(DocumentsContract.buildDocumentUriUsingTree(tree, id)));
+        } catch (org.json.JSONException e) {
+            throw new IOException("项目清单文件无效", e);
+        }
+    }
+
+    private void writeTextFile(Uri tree, String parentId, String name, String text) throws Exception {
+        String id = findChild(tree, parentId, name);
+        Uri target;
+        if (id == null) {
+            Uri created = DocumentsContract.createDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, parentId), "application/json", name);
+            if (created == null) throw new IOException("无法创建项目清单");
+            target = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getDocumentId(created));
+        } else target = DocumentsContract.buildDocumentUriUsingTree(tree, id);
+        try (OutputStream output = getContentResolver().openOutputStream(target, "wt")) {
+            if (output == null) throw new IOException("无法写入项目清单");
+            output.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private String findDocumentByPath(Uri tree, String path) throws IOException {
+        if (!isSafeProjectPath(path)) return null;
+        String parentId = DocumentsContract.getTreeDocumentId(tree);
+        String[] parts = path.split("/");
+        for (int i = 0; i < parts.length; i++) {
+            String id = findChild(tree, parentId, parts[i]);
+            if (id == null) return null;
+            parentId = id;
+        }
+        return parentId;
     }
 
     private String findOrCreateDirectory(Uri tree, String parentId, String name) throws IOException {
@@ -304,6 +376,7 @@ public class MainActivity extends Activity {
 
     private static boolean isSafeName(String name) { return name != null && !name.isEmpty() && !".".equals(name) && !"..".equals(name) && !name.contains("/") && !name.contains("\\"); }
     private static boolean isSourceFile(String name) { return name.matches("(?i).+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)"); }
+    private static boolean isSafeProjectPath(String path) { return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.contains("..") && !path.endsWith("/"); }
 
     private void installToolchain(Uri uri) throws IOException {
         File root = new File(getFilesDir(), "toolchain");
