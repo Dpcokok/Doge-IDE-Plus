@@ -10,4 +10,5 @@ final class NativeWasmRunner {
     }
 
     static synchronized native String run(byte[] wasm, byte[] stdin, int timeoutMs);
+    static native void cancel();
 }

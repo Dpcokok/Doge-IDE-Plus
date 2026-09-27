@@ -35,6 +35,7 @@ final class LocalServer implements Closeable {
 
     private static final String TAG = "DogeIDE";
     private static final String API_PATH = "/api/v1/execution/run";
+    private static final String CANCEL_PATH = "/api/v1/execution/cancel";
     private static final int PREFERRED_PORT = 8787;
     private static final int MAX_BODY = 10 << 20;
     private static final int SOCKET_TIMEOUT_MS = 15000;
@@ -89,6 +90,7 @@ final class LocalServer implements Closeable {
     @Override
     public synchronized void close() {
         running = false;
+        LocalCompiler.cancelActive();
         if (serverSocket != null) {
             try {
                 serverSocket.close();
@@ -317,6 +319,13 @@ final class LocalServer implements Closeable {
     // ---------------------------------------------------------------- 路由
 
     private boolean respond(OutputStream out, Request req) throws IOException {
+        if (CANCEL_PATH.equals(req.path)) {
+            if (!"POST".equals(req.method)) {
+                return sendBytes(out, req, 405, "text/plain; charset=utf-8", "method not allowed".getBytes(StandardCharsets.UTF_8));
+            }
+            LocalCompiler.cancelActive();
+            return sendBytes(out, req, 200, "application/json; charset=utf-8", "{\"status\":\"canceled\"}".getBytes(StandardCharsets.UTF_8));
+        }
         if (API_PATH.equals(req.path)) {
             if (!"POST".equals(req.method)) {
                 return sendBytes(out, req, 405, "text/plain; charset=utf-8",

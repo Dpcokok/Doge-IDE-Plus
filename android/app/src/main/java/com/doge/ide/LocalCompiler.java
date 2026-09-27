@@ -12,14 +12,22 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Compiles a small local C/C++ project to a WASI module. */
 final class LocalCompiler {
     private static final long MAX_OUTPUT = 2L * 1024L * 1024L;
     private final File filesDir;
+    private static final Set<Process> ACTIVE_PROCESSES = ConcurrentHashMap.newKeySet();
 
     LocalCompiler(Context context) {
         filesDir = context.getApplicationContext().getFilesDir();
+    }
+
+    static void cancelActive() {
+        for (Process process : ACTIVE_PROCESSES) process.destroyForcibly();
+        NativeWasmRunner.cancel();
     }
 
     String execute(String requestJson) {
@@ -138,6 +146,7 @@ final class LocalCompiler {
 
     private static ProcessResult runProcess(ProcessBuilder builder, int timeout) throws Exception {
         Process process = builder.redirectErrorStream(false).start();
+        ACTIVE_PROCESSES.add(process);
         ByteArrayOutputStream stdout = new ByteArrayOutputStream();
         ByteArrayOutputStream stderr = new ByteArrayOutputStream();
         Thread outReader = drain(process.getInputStream(), stdout);
@@ -145,6 +154,7 @@ final class LocalCompiler {
         boolean finished = process.waitFor(timeout, TimeUnit.MILLISECONDS);
         if (!finished) process.destroyForcibly();
         outReader.join(1000); errReader.join(1000);
+        ACTIVE_PROCESSES.remove(process);
         return new ProcessResult(finished, finished ? process.exitValue() : -1, stderr.toString(StandardCharsets.UTF_8));
     }
 

@@ -58,6 +58,8 @@ public class MainActivity extends Activity {
     private static final int PICK_TOOLCHAIN = 42;
     private static final int PICK_PROJECT = 43;
     private static final int MAX_PROJECT_FILE = 2 * 1024 * 1024;
+    private static final long MAX_TOOLCHAIN_BYTES = 512L * 1024 * 1024;
+    private static final int MAX_TOOLCHAIN_ENTRIES = 100000;
     private static final String PROJECT_MANIFEST = ".doge-project.json";
 
     private WebView web;
@@ -173,7 +175,9 @@ public class MainActivity extends Activity {
                 try {
                     JSONObject project = readProject(uri);
                     getPreferences(MODE_PRIVATE).edit().putString("project_tree_uri", uri.toString()).apply();
-                    runOnUiThread(() -> web.evaluateJavascript("window.projectOpened && window.projectOpened(" + JSONObject.quote(project.toString()) + ")", null));
+                    runOnUiThread(() -> {
+                        if (web != null) web.evaluateJavascript("window.projectOpened && window.projectOpened(" + JSONObject.quote(project.toString()) + ")", null);
+                    });
                 } catch (Exception e) {
                     Log.e(TAG, "project open failed", e);
                     notifyProjectError(e.getMessage());
@@ -186,11 +190,15 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 installToolchain(uri);
-                runOnUiThread(() -> web.evaluateJavascript("window.toolchainImported && window.toolchainImported(true, '')", null));
+                runOnUiThread(() -> {
+                    if (web != null) web.evaluateJavascript("window.toolchainImported && window.toolchainImported(true, '')", null);
+                });
             } catch (Exception e) {
                 Log.e(TAG, "toolchain import failed", e);
                 String message = e.getMessage() == null ? "导入失败" : e.getMessage().replace("\\", "\\\\").replace("'", "\\'");
-                runOnUiThread(() -> web.evaluateJavascript("window.toolchainImported && window.toolchainImported(false, '" + message + "')", null));
+                runOnUiThread(() -> {
+                    if (web != null) web.evaluateJavascript("window.toolchainImported && window.toolchainImported(false, '" + message + "')", null);
+                });
             }
         }, "doge-toolchain-import").start();
     }
@@ -377,7 +385,9 @@ public class MainActivity extends Activity {
 
     private void notifyProjectError(String message) {
         String safe = message == null ? "项目操作失败" : message;
-        runOnUiThread(() -> web.evaluateJavascript("window.projectError && window.projectError(" + JSONObject.quote(safe) + ")", null));
+        runOnUiThread(() -> {
+            if (web != null) web.evaluateJavascript("window.projectError && window.projectError(" + JSONObject.quote(safe) + ")", null);
+        });
     }
 
     private static boolean isSafeName(String name) { return name != null && !name.isEmpty() && !".".equals(name) && !"..".equals(name) && !name.contains("/") && !name.contains("\\"); }
@@ -389,42 +399,58 @@ public class MainActivity extends Activity {
         File staging = new File(getFilesDir(), "toolchain.importing");
         deleteTree(staging);
         if (!staging.mkdirs() && !staging.isDirectory()) throw new IOException("无法创建临时目录");
-        try (InputStream raw = getContentResolver().openInputStream(uri);
-             ZipInputStream zip = new ZipInputStream(raw)) {
-            if (raw == null) throw new IOException("无法读取资源包");
-            ZipEntry entry;
-            byte[] buffer = new byte[32768];
-            while ((entry = zip.getNextEntry()) != null) {
-                String name = entry.getName().replace('\\', '/');
-                if (name.startsWith("/") || name.contains("../")) throw new IOException("资源包路径无效");
-                File out = new File(staging, name);
-                if (!out.getCanonicalPath().startsWith(staging.getCanonicalPath() + File.separator)) throw new IOException("资源包路径无效");
-                if (entry.isDirectory()) { out.mkdirs(); continue; }
-                File parent = out.getParentFile();
-                if (parent != null) parent.mkdirs();
-                try (OutputStream target = new FileOutputStream(out)) {
-                    int n; while ((n = zip.read(buffer)) >= 0) { if (n > 0) target.write(buffer, 0, n); }
+        boolean ok = false;
+        try {
+            if (staging.getUsableSpace() < MAX_TOOLCHAIN_BYTES) throw new IOException("设备剩余空间不足");
+            try (InputStream raw = getContentResolver().openInputStream(uri);
+                 ZipInputStream zip = new ZipInputStream(raw)) {
+                if (raw == null) throw new IOException("无法读取资源包");
+                ZipEntry entry;
+                byte[] buffer = new byte[32768];
+                long totalBytes = 0;
+                int entryCount = 0;
+                while ((entry = zip.getNextEntry()) != null) {
+                    if (++entryCount > MAX_TOOLCHAIN_ENTRIES) throw new IOException("资源包条目数量过多");
+                    String name = entry.getName().replace('\\', '/');
+                    if (name.startsWith("/") || name.contains("../")) throw new IOException("资源包路径无效");
+                    File out = new File(staging, name);
+                    if (!out.getCanonicalPath().startsWith(staging.getCanonicalPath() + File.separator)) throw new IOException("资源包路径无效");
+                    if (entry.isDirectory()) { out.mkdirs(); continue; }
+                    File parent = out.getParentFile();
+                    if (parent != null) parent.mkdirs();
+                    try (OutputStream target = new FileOutputStream(out)) {
+                        int n; while ((n = zip.read(buffer)) >= 0) {
+                            if (n > 0) {
+                                totalBytes += n;
+                                if (totalBytes > MAX_TOOLCHAIN_BYTES) throw new IOException("资源包解压后过大");
+                                target.write(buffer, 0, n);
+                            }
+                        }
+                    }
                 }
             }
-        }
-        File manifest = new File(staging, "manifest.json");
-        if (!manifest.isFile()) throw new IOException("缺少资源包 manifest.json");
-        try {
-            JSONObject meta = new JSONObject(new String(java.nio.file.Files.readAllBytes(manifest.toPath()), java.nio.charset.StandardCharsets.UTF_8));
-            if (meta.optInt("format", 0) != 1) throw new IOException("不支持的资源包格式");
-            File clang = new File(staging, meta.optString("clang", "bin/clang"));
-            File sysroot = new File(staging, meta.optString("sysroot", "wasi-sysroot"));
-            if (!clang.isFile() || !sysroot.isDirectory()) throw new IOException("资源包缺少 Clang 或 WASI sysroot");
-            if (!clang.setExecutable(true, false)) throw new IOException("无法启用 Clang 执行权限");
-            for (String executable : new String[]{"clang++", "clang-21", "clang++-21", "wasm-ld", "ld.lld"}) {
-                File file = new File(staging, "bin/" + executable);
-                if (file.isFile() && !file.setExecutable(true, false)) throw new IOException("无法启用工具执行权限: " + executable);
+            File manifest = new File(staging, "manifest.json");
+            if (!manifest.isFile()) throw new IOException("缺少资源包 manifest.json");
+            try {
+                JSONObject meta = new JSONObject(new String(java.nio.file.Files.readAllBytes(manifest.toPath()), java.nio.charset.StandardCharsets.UTF_8));
+                if (meta.optInt("format", 0) != 1) throw new IOException("不支持的资源包格式");
+                File clang = new File(staging, meta.optString("clang", "bin/clang"));
+                File sysroot = new File(staging, meta.optString("sysroot", "wasi-sysroot"));
+                if (!clang.isFile() || !sysroot.isDirectory()) throw new IOException("资源包缺少 Clang 或 WASI sysroot");
+                if (!clang.setExecutable(true, false)) throw new IOException("无法启用 Clang 执行权限");
+                for (String executable : new String[]{"clang++", "clang-21", "clang++-21", "wasm-ld", "ld.lld"}) {
+                    File file = new File(staging, "bin/" + executable);
+                    if (file.isFile() && !file.setExecutable(true, false)) throw new IOException("无法启用工具执行权限: " + executable);
+                }
+            } catch (org.json.JSONException e) {
+                throw new IOException("manifest.json 无效", e);
             }
-        } catch (org.json.JSONException e) {
-            throw new IOException("manifest.json 无效", e);
+            deleteTree(root);
+            if (!staging.renameTo(root)) throw new IOException("无法安装资源包");
+            ok = true;
+        } finally {
+            if (!ok) deleteTree(staging);
         }
-        deleteTree(root);
-        if (!staging.renameTo(root)) throw new IOException("无法安装资源包");
     }
 
     private static void deleteTree(File file) {

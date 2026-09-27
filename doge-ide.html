@@ -490,6 +490,7 @@ let breakpoints = {};
 let debugState = { events: [], index: -1, lang: null };
 let debugLineHandle = null;
 let bpSaveTimer = null;
+let projectSaveTimer = null;
 const BP_GUTTER = 'doge-breakpoints';
 const TRACE_PREFIX = '__DOGE_TRACE__';
 const TRACE_SUFFIX = '__DOGE_END__';
@@ -1109,6 +1110,7 @@ function init() {
   initResize();
   initKeybindings();
   updateLangInfo();
+  window.addEventListener('pagehide', flushProjectSave);
 }
 
 function buildTabs() {
@@ -1161,7 +1163,7 @@ function initEditor() {
   editor.on('change', () => {
     const file = getProjectFile(currentFilePath);
     if (file) file.code = editor.getValue();
-    saveProject();
+    scheduleProjectSave();
     scheduleLint();
     scheduleBpSave();
   });
@@ -1227,8 +1229,26 @@ function loadProject() {
   project.files = project.files.filter(file => file && typeof file.path === 'string' && file.path && !unique.has(file.path) && unique.set(file.path, true));
   if (!getProjectFile(currentFilePath)) currentFilePath = project.files[0].path;
 }
-function saveProject() {
+function persistProject() {
   try { localStorage.setItem(projectStorageKey(), JSON.stringify(project)); } catch (e) {}
+}
+function scheduleProjectSave() {
+  clearTimeout(projectSaveTimer);
+  projectSaveTimer = setTimeout(() => {
+    projectSaveTimer = null;
+    persistProject();
+  }, 500);
+}
+function flushProjectSave() {
+  if (!projectSaveTimer) return;
+  clearTimeout(projectSaveTimer);
+  projectSaveTimer = null;
+  persistProject();
+}
+function saveProject() {
+  clearTimeout(projectSaveTimer);
+  projectSaveTimer = null;
+  persistProject();
   renderProjectFiles();
 }
 function openProject() {
@@ -1358,12 +1378,17 @@ function newProjectFile() {
 }
 function deleteProjectFile() {
   if (project.files.length <= 1) { showToast('项目至少需要一个文件', 'info'); return; }
-  saveCurrentFile();
   const index = project.files.findIndex(file => file.path === currentFilePath);
-  project.files.splice(index, 1);
-  currentFilePath = project.files[Math.max(0, index - 1)].path;
-  saveProject();
-  switchProjectFile(currentFilePath);
+  if (index < 0) return;
+  const target = currentFilePath;
+  dogeConfirm(`确定删除文件 “${target}” 吗？此操作不可撤销。`, () => {
+    const at = project.files.findIndex(file => file.path === target);
+    if (at < 0) return;
+    saveCurrentFile();
+    project.files.splice(at, 1);
+    currentFilePath = '';
+    switchProjectFile(project.files[Math.max(0, at - 1)].path);
+  });
 }
 
 function updateLangInfo() {
@@ -1738,7 +1763,7 @@ function renderDebugPanel() {
 
 // Run
 async function runCode() {
-  if (isRunning) return;
+  if (isRunning) { cancelExecution(); return; }
   syncCurrentFile();
   const lang = languageForPath(currentFilePath);
   currentLang = lang.id;
@@ -1808,11 +1833,19 @@ async function runCode() {
     const t0 = Date.now();
     data = await parseBody(await execFetch());
     elapsed = Date.now() - t0;
-  } catch (err) {
+    } catch (err) {
+    if (err && err.name === 'AbortError') {
+      try { await fetch('/api/v1/execution/cancel', { method: 'POST', keepalive: true }); } catch (ignored) {}
+      dot.className = 'status-dot error';
+      outputData.stderr = '运行已取消';
+      outputData.info = `[${lang.name}] 已请求取消\n`;
+      showToast('运行已取消', 'info');
+    } else {
     dot.className = 'status-dot error';
     outputData.stderr = `本地执行服务不可用：${err.message}`;
     outputData.info = `[${lang.name}] 本地运行失败\n`;
     showToast('本地执行失败', 'error');
+    }
     isRunning = false;
     btn.classList.remove('running');
     btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run <kbd>Ctrl+↵</kbd>`;
@@ -1826,7 +1859,7 @@ async function runCode() {
       outputData.stdout = data.stdout || '(no output)';
       outputData.stderr = data.stderr || '';
       outputData.info = buildInfo(data, elapsed);
-      showToast(`✓ Completed in ${data.run_ms || elapsed}ms`, 'success');
+       showToast(`✓ Completed in ${elapsed}ms`, 'success');
     } else if (data.status === 'compile_error') {
       dot.className = 'status-dot error';
       outputData.stderr = data.stderr || data.message || 'Compile error';
@@ -1838,14 +1871,19 @@ async function runCode() {
       outputData.stdout = data.stdout || '';
       outputData.info = buildInfo(data, elapsed);
       showToast('✗ Runtime Error', 'error');
-    } else if (data.status === 'timeout') {
+     } else if (data.status === 'timeout') {
       dot.className = 'status-dot error';
       outputData.stdout = data.stdout || '';
-      const earlyKill = data.run_ms && data.run_ms < (data.timeout_ms || 30000);
-      outputData.stderr = `Execution timed out (${data.timeout_ms || 30000}ms limit)` +
-        (earlyKill ? `\n注意：进程只运行了 ${data.run_ms}ms 就被沙盒杀掉（signal ${data.signal != null ? data.signal : '?'}），可能是沙盒侧异常而非真的超时。` : '');
+      const limit = Number(getSetting('timeout', 30000)) || 30000;
+      outputData.stderr = `Execution timed out (${limit}ms limit)`;
       outputData.info = buildInfo(data, elapsed);
-      showToast('✗ Timeout', 'error');
+       showToast('✗ Timeout', 'error');
+     } else if (data.status === 'canceled') {
+       dot.className = 'status-dot error';
+       outputData.stdout = data.stdout || '';
+       outputData.stderr = data.stderr || data.message || '运行已取消';
+       outputData.info = buildInfo(data, elapsed);
+       showToast('运行已取消', 'info');
     } else if (data.status === 'runtime_not_ready') {
       dot.className = 'status-dot error';
       outputData.stderr = data.message || '本地 C/C++ 运行环境尚未就绪';
@@ -1879,14 +1917,21 @@ async function runCode() {
   renderOutput();
 }
 
+async function cancelExecution() {
+  if (!isRunning) return;
+  try { await fetch('/api/v1/execution/cancel', { method: 'POST', keepalive: true }); }
+  catch (e) { showToast('取消请求失败', 'error'); }
+}
+
 function buildInfo(data, elapsed) {
+  const lang = getLang(currentLang);
   const lines = [];
-  lines.push(`Language: ${data.language || currentLang}`);
-  if (data.exit_code !== undefined && data.exit_code !== null) lines.push(`Exit code: ${data.exit_code}`);
-  if (data.compile_ms) lines.push(`Compile: ${data.compile_ms}ms`);
-  if (data.run_ms) lines.push(`Runtime: ${data.run_ms}ms`);
-  lines.push(`Total: ${data.total_ms || elapsed}ms`);
-  if (data.timed_out) lines.push('⚠ Timed out');
+  lines.push(`Language: ${lang ? `${lang.name} · ${lang.version}` : currentLang}`);
+  lines.push('Runtime: 本地 (WAMR/WASI)');
+  if (data.status) lines.push(`Status: ${data.status}`);
+  if (typeof data.exit_code === 'number') lines.push(`Exit code: ${data.exit_code}`);
+  if (typeof data.total_ms === 'number') lines.push(`Total: ${data.total_ms}ms`);
+  else if (elapsed) lines.push(`Total: ${elapsed}ms (客户端计时)`);
   if (data.stdout_truncated) lines.push('⚠ stdout truncated');
   if (data.stderr_truncated) lines.push('⚠ stderr truncated');
   return lines.join('\n');
@@ -2016,11 +2061,10 @@ function initKeybindings() {
       runCode();
       return;
     }
-    // Ctrl+S = Save
+    // Ctrl+S = Save draft + real project directory (Android)
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
-      saveCode(currentLang, editor.getValue());
-      showToast('Code saved locally', 'info');
+      saveProjectToDisk();
       return;
     }
     // Ctrl+L = Clear output
@@ -2113,6 +2157,40 @@ function showToast(msg, type='info') {
 // Modal
 function closeModal() {
   document.getElementById('shortcutModal').classList.remove('show');
+}
+
+// In-page confirm dialog (WebView has no WebChromeClient, so window.confirm is unusable)
+function dogeConfirm(message, onConfirm, confirmLabel) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay show';
+  const box = document.createElement('div');
+  box.className = 'modal';
+  const title = document.createElement('h3');
+  title.textContent = '请确认';
+  const text = document.createElement('p');
+  text.textContent = message;
+  text.style.cssText = 'margin:8px 0 4px;font-size:13px;color:var(--fg2);line-height:1.6';
+  const actions = document.createElement('div');
+  actions.className = 'settings-actions';
+  const cancel = document.createElement('button');
+  cancel.className = 'settings-cancel';
+  cancel.textContent = '取消';
+  const ok = document.createElement('button');
+  ok.className = 'settings-save';
+  ok.textContent = confirmLabel || '确定';
+  ok.style.background = 'var(--red)';
+  ok.style.color = '#1a1b26';
+  const close = () => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+  cancel.onclick = close;
+  ok.onclick = () => { close(); onConfirm(); };
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  actions.appendChild(cancel);
+  actions.appendChild(ok);
+  box.appendChild(title);
+  box.appendChild(text);
+  box.appendChild(actions);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
 }
 
 // Start
