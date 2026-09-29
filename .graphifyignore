@@ -1,0 +1,4 @@
+# Vendored, minified third-party bundles - no project concepts, only noise.
+web/codemirror/
+web/fonts/
+android/app/src/main/cpp/wamr/

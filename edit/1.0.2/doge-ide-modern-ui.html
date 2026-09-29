@@ -1,0 +1,1486 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Doge IDE+ · 现代化界面参考原型</title>
+<style>
+/* ═══ tokens ══════════════════════════════════════════════════════════
+   全部来自 doge-ide.html 实测值换算，OKLch 化。见 brand-spec.md        */
+:root {
+  --bg:      oklch(0.2263 0.0214 280.5);   /* #1a1b26 画布 */
+  --surface: oklch(0.2819 0.0355 274.7);   /* #24283b 面板 */
+  --fg:      oklch(0.8456 0.0611 274.8);   /* #c0caf5 主文本 */
+  --muted:   oklch(0.7666 0.0537 275.5);   /* #a9b1d6 次级文本 */
+  --border:  oklch(0.3867 0.0537 273.9);   /* #3b4261 发丝线 */
+  --accent:  oklch(0.7190 0.1322 264.2);   /* #7aa2f7 唯一强调色 */
+
+  --hover:   oklch(0.3056 0.0369 273.2);   /* #292e42 悬停面 */
+  --sunken:  oklch(0.2040 0.0158 284.9);   /* #16161e 输入槽 */
+  --ink:     oklch(0.2263 0.0214 280.5);   /* accent 面上的深色文字 */
+  --acc-up:  oklch(0.6500 0.1420 264.2);   /* accent 悬停（更深，文字对比不降） */
+  --ok:      oklch(0.7953 0.1395 130.1);
+  --err:     oklch(0.7227 0.1589 10.3);
+  --warn:    oklch(0.7870 0.1373 50.6);
+  --info:    oklch(0.7537 0.1243 213.2);
+  --hint:    oklch(0.8561 0.0943 225.9);
+
+  --accent-soft: color-mix(in oklch, var(--accent) 16%, transparent);
+  --fg-soft:     color-mix(in oklch, var(--fg) 7%, transparent);
+  --scrim:       color-mix(in oklch, var(--bg) 72%, transparent);
+
+  --font-display: 'Iowan Old Style', 'Charter', Georgia, 'Times New Roman', serif;
+  --font-body:    'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono:    'Maple Mono', ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+
+  --explorer-w: 264px;
+  --panel-h: 232px;
+  --code-size: 14px;
+  --r: 8px;
+  --shadow: 0 12px 32px color-mix(in oklch, black 55%, transparent);
+  --gap-xs: 8px; --gap-sm: 12px; --gap-md: 20px; --gap-lg: 32px; --gap-xl: 56px; --gap-2xl: 96px;
+  --gutter: 32px;
+}
+
+*,*::before,*::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--font-body);
+  font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+img,svg { display:block; max-width:100%; }
+button,input,select,textarea { font:inherit; color:inherit; }
+button { cursor:pointer; background:none; border:0; padding:0; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-radius:4px; }
+p { text-wrap:pretty; } h1,h2,h3 { text-wrap:balance; }
+[hidden] { display:none !important; }
+.mono { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.muted { color:var(--muted); }
+kbd { font-family:var(--font-mono); font-size:11px; color:var(--muted);
+  background:var(--fg-soft); border:1px solid var(--border); border-radius:4px; padding:1px 5px; white-space:nowrap; }
+
+/* ═══ 1. 菜单栏 ═══════════════════════════════════════════════════════ */
+.menubar { height:40px; display:flex; align-items:stretch; gap:2px; padding-inline:8px;
+  background:var(--surface); border-bottom:1px solid var(--border); position:relative; z-index:60; }
+.brand { display:flex; align-items:center; gap:8px; padding-inline:8px 14px; margin-right:4px;
+  font-weight:600; letter-spacing:-.01em; }
+.brand svg { width:18px; height:18px; }
+.menu-list { display:flex; align-items:stretch; }
+.menu-btn { padding-inline:11px; height:100%; color:var(--muted); font-size:13.5px; border-radius:0; }
+.menu-btn:hover { background:var(--hover); color:var(--fg); }
+.menu-btn[aria-expanded="true"] { background:var(--accent-soft); color:var(--fg); }
+.menubar-spacer { flex:1; }
+.menubar-right { display:flex; align-items:center; gap:8px; }
+.state-chip { display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono);
+  font-size:11.5px; color:var(--muted); padding-inline:10px; height:28px;
+  border:1px solid var(--border); border-radius:999px; white-space:nowrap; }
+.state-chip .dot { width:7px; height:7px; border-radius:50%; background:var(--muted); flex:none; }
+.state-chip[data-s="ready"] .dot { background:var(--ok); }
+.state-chip[data-s="run"] .dot { background:var(--info); animation:pulse 1s infinite; }
+.state-chip[data-s="err"] .dot { background:var(--err); }
+@keyframes pulse { 50% { opacity:.25; } }
+
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:28px;
+  padding-inline:12px; border-radius:6px; font-size:13px; font-weight:500; border:1px solid transparent;
+  transition:background .14s ease, border-color .14s ease, transform .05s ease; }
+.btn:active { transform:translateY(1px); }
+.btn svg { width:13px; height:13px; }
+.btn-primary { background:var(--accent); color:var(--ink); }
+.btn-primary:hover { background:var(--acc-up); }
+.btn-primary kbd { color:var(--ink); border-color:color-mix(in oklch, var(--ink) 34%, transparent); background:transparent; padding:0; }
+.btn-primary:disabled { background:var(--fg-soft); color:var(--muted); border-color:var(--border); cursor:default; }
+.btn-primary:disabled kbd { color:var(--muted); border-color:var(--border); }
+.btn-outline { background:transparent; color:var(--fg); border-color:var(--border); }
+.btn-outline:hover { border-color:var(--muted); background:var(--fg-soft); }
+.btn-outline[hidden] { display:none; }
+.btn-icon { width:28px; height:28px; padding:0; color:var(--muted); border-radius:6px; }
+.btn-icon:hover { background:var(--hover); color:var(--fg); }
+
+/* ═══ 2. 工作台骨架 ═══════════════════════════════════════════════════
+   网格而非 flex：左三列（活动栏 / 资源管理器 / 竖把手）通高，
+   第四列自上而下为「编辑区 / 横把手 / 底部面板」三行。            */
+.workbench { display:grid; height:calc(100dvh - 64px); min-height:520px; overflow:hidden;
+  position:relative;
+  grid-template-columns:auto auto auto minmax(0,1fr);
+  grid-template-rows:minmax(0,1fr) auto auto; }
+.workbench > .rail      { grid-column:1; grid-row:1/4; }
+.workbench > .explorer  { grid-column:2; grid-row:1/4; }
+.workbench > .vsplit    { grid-column:3; grid-row:1/4; }
+.workbench > .editor-col{ grid-column:4; grid-row:1; }
+.workbench > .hsplit    { grid-column:4; grid-row:2; }
+.workbench > .panel     { grid-column:4; grid-row:3; }
+
+/* 活动栏 */
+.rail { width:48px; flex:none; display:flex; flex-direction:column; align-items:center;
+  gap:2px; padding-block:8px; background:var(--sunken); border-right:1px solid var(--border); }
+.rail-btn { width:48px; height:48px; display:grid; place-items:center; color:var(--muted);
+  border-radius:0; position:relative; }
+.rail-btn svg { width:19px; height:19px; }
+.rail-btn:hover { color:var(--fg); }
+.rail-btn[aria-selected="true"], .rail-btn.active { color:var(--accent); }
+.rail-btn.active::before { content:''; position:absolute; left:0; top:8px; bottom:8px;
+  width:2px; background:var(--accent); border-radius:0 2px 2px 0; }
+.rail-btn .badge { position:absolute; right:6px; bottom:8px; min-width:16px; height:16px; padding:0 4px;
+  display:grid; place-items:center; font-family:var(--font-mono); font-size:10px; line-height:1;
+  color:var(--sunken); background:var(--err); border-radius:999px; }
+.rail-gap { flex:1; }
+
+/* 资源管理器 */
+.explorer { width:var(--explorer-w); flex:none; min-width:180px; display:flex; flex-direction:column;
+  background:var(--surface); border-right:1px solid var(--border); overflow:hidden; }
+.explorer[hidden] { display:none; }
+.side-head { height:36px; flex:none; display:flex; align-items:center; gap:4px; padding-inline:8px 6px;
+  font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted);
+  border-bottom:1px solid var(--border); }
+.side-head .title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.side-head .title b { color:var(--fg); font-weight:600; letter-spacing:0; text-transform:none; font-size:13px; }
+.tree { flex:1; overflow:auto; padding:6px 0 12px; }
+.tree-row { display:flex; align-items:center; gap:6px; width:100%; min-height:30px; padding-inline:10px 8px;
+  text-align:left; color:var(--muted); font-size:13px; }
+.tree-row:hover { background:var(--hover); color:var(--fg); }
+.tree-row[aria-current="true"] { background:var(--fg-soft); color:var(--fg); }
+.tree-row .caret { width:12px; height:12px; flex:none; transition:transform .15s ease; }
+.tree-row[data-open="false"] .caret { transform:rotate(-90deg); }
+.tree-row svg.ficon { width:15px; height:15px; flex:none; color:var(--muted); }
+.tree-row .label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tree-row .dot { width:6px; height:6px; border-radius:50%; background:var(--accent); flex:none; }
+.tree-children[hidden] { display:none; }
+.rename-input { width:100%; height:24px; background:var(--sunken); border:1px solid var(--accent);
+  border-radius:4px; padding-inline:6px; font-family:var(--font-mono); font-size:12.5px; }
+.side-foot { flex:none; padding:8px 10px; border-top:1px solid var(--border);
+  font-family:var(--font-mono); font-size:11px; color:var(--muted); display:flex; justify-content:space-between; gap:8px; }
+
+/* 拖拽把手：命中区比可见区大，但不占额外布局 */
+.vsplit { width:5px; margin-inline:-2px; cursor:col-resize; z-index:5; background:transparent; }
+.hsplit { height:7px; cursor:row-resize; z-index:5; background:transparent; position:relative; }
+.hsplit::after { content:''; position:absolute; inset:-4px 0; }
+.vsplit:hover, .vsplit:focus-visible { background:var(--accent-soft); }
+.hsplit:hover, .hsplit:focus-visible { box-shadow:inset 0 2px 0 var(--accent); }
+
+/* ═══ 3. 编辑器 ═══════════════════════════════════════════════════════ */
+.editor-col { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.tabs { height:36px; flex:none; display:flex; align-items:stretch; background:var(--surface);
+  border-bottom:1px solid var(--border); overflow-x:auto; scrollbar-width:none; }
+.tabs::-webkit-scrollbar { display:none; }
+.tab { display:flex; align-items:center; gap:7px; padding-inline:12px 8px; max-width:220px;
+  color:var(--muted); font-size:13px; white-space:nowrap; border-right:1px solid var(--border);
+  border-bottom:1px solid transparent; }
+.tab:hover { background:var(--hover); color:var(--fg); }
+.tab[aria-selected="true"] { background:var(--bg); color:var(--fg); border-bottom-color:var(--accent); }
+.tab .fname { overflow:hidden; text-overflow:ellipsis; }
+.tab .close { width:18px; height:18px; display:grid; place-items:center; border-radius:4px;
+  color:var(--muted); flex:none; opacity:0; }
+.tab:hover .close, .tab[aria-selected="true"] .close { opacity:1; }
+.tab .close:hover { background:var(--fg-soft); color:var(--fg); }
+.tab .close svg { width:10px; height:10px; }
+.breadcrumb { height:30px; flex:none; display:flex; align-items:center; gap:6px; padding-inline:14px;
+  font-family:var(--font-mono); font-size:12px; color:var(--muted); border-bottom:1px solid var(--border);
+  overflow:hidden; white-space:nowrap; }
+.breadcrumb .sep { opacity:.6; }
+.breadcrumb .cur { color:var(--fg); }
+.breadcrumb .lang { margin-left:auto; color:var(--muted); border:1px solid var(--border);
+  border-radius:999px; padding:0 8px; line-height:17px; flex:none; }
+
+.code { flex:1; overflow:auto; padding:10px 0 40vh; font-family:var(--font-mono);
+  font-size:var(--code-size); line-height:1.65; }
+.cline { display:flex; align-items:flex-start; }
+.cline.cur { background:var(--fg-soft); box-shadow:inset 2px 0 0 var(--border); }
+.gutter { width:52px; flex:none; display:flex; justify-content:flex-end; gap:8px; padding-right:10px;
+  color:var(--muted); opacity:.75; user-select:none; position:sticky; left:0; background:var(--bg); }
+.cline.cur .gutter { opacity:1; background:var(--fg-soft); }
+.bp { position:relative; width:12px; height:12px; margin-top:5px; border-radius:50%; background:var(--err);
+  flex:none; border:0; padding:0; }
+.bp::after { content:''; position:absolute; inset:-6px -9px; }
+.bp.off { background:transparent; border:1.5px solid var(--muted); }
+.bp:hover { border-color:var(--err); }
+.bp:hover.off { background:var(--err); }
+.src { flex:1; padding-right:16px; white-space:pre; }
+.tk-kw { color:var(--hint); } .tk-pp { color:var(--err); } .tk-str { color:var(--ok); }
+.tk-num { color:var(--warn); } .tk-cm { color:var(--muted); font-style:italic; }
+.tk-fn { color:var(--accent); } .tk-ty { color:var(--info); } .tk-pn { color:var(--muted); }
+.squiggle { border-bottom:1.5px wavy var(--warn); padding-bottom:1px; }
+
+.stdin { flex:none; border-top:1px solid var(--border); background:var(--surface); }
+.stdin-head { height:32px; display:flex; align-items:center; gap:8px; padding-inline:12px;
+  font-size:12px; color:var(--muted); letter-spacing:.04em; }
+.stdin-head:hover { background:var(--hover); color:var(--fg); }
+.stdin-head .caret { width:12px; height:12px; transition:transform .15s ease; }
+.stdin-head[aria-expanded="false"] .caret { transform:rotate(-90deg); }
+.stdin-head .hint { margin-left:auto; font-family:var(--font-mono); font-size:11px; opacity:.8; }
+.stdin textarea { width:100%; height:76px; resize:none; display:block; background:var(--sunken);
+  border:0; border-top:1px solid var(--border); padding:8px 12px; font-family:var(--font-mono);
+  font-size:var(--code-size); line-height:1.6; color:var(--fg); }
+.stdin textarea:focus { outline:none; box-shadow:inset 0 0 0 2px var(--accent); }
+.stdin[data-open="false"] textarea { display:none; }
+
+/* ═══ 4. 底部面板 ═════════════════════════════════════════════════════ */
+.panel { height:var(--panel-h); flex:none; min-height:34px; display:flex; flex-direction:column;
+  background:var(--surface); overflow:hidden; }
+.panel[data-open="false"] { height:34px; }
+.panel[data-open="false"] .panel-body { display:none; }
+.panel-tabs { height:34px; flex:none; display:flex; align-items:stretch; padding-inline:6px; gap:2px;
+  overflow-x:auto; scrollbar-width:none; }
+.panel-tabs::-webkit-scrollbar { display:none; }
+.panel-tab { display:flex; align-items:center; gap:6px; padding-inline:10px; color:var(--muted);
+  font-size:11px; letter-spacing:.08em; text-transform:uppercase; border-bottom:1.5px solid transparent; }
+.panel-tab:hover { color:var(--fg); background:var(--hover); }
+.panel-tab[aria-selected="true"] { color:var(--fg); border-bottom-color:var(--accent); }
+.panel-tab .n { font-family:var(--font-mono); font-size:10.5px; color:var(--sunken);
+  background:var(--muted); border-radius:999px; min-width:16px; text-align:center; line-height:16px; letter-spacing:0; }
+.panel-tab[aria-selected="true"] .n { background:var(--accent); }
+.panel-tab .n.err { background:var(--err); color:var(--fg); }
+.panel-actions { margin-left:auto; display:flex; align-items:center; gap:2px; }
+.p-spacer { flex:1; }
+.panel-body { flex:1; overflow:auto; font-family:var(--font-mono); font-size:12.5px; line-height:1.7; }
+.seg .n { color:var(--ink); background:var(--muted); border-radius:999px; min-width:15px;
+  text-align:center; line-height:15px; margin-left:3px; }
+.stream-bar { display:flex; align-items:center; gap:2px; padding:6px 10px; border-bottom:1px solid var(--border);
+  position:sticky; top:0; background:var(--surface); }
+.seg { padding:3px 10px; border-radius:999px; font-size:11.5px; color:var(--muted); font-family:var(--font-mono); }
+.seg:hover { background:var(--hover); color:var(--fg); }
+.seg[aria-selected="true"] { background:var(--fg-soft); color:var(--fg); box-shadow:inset 0 0 0 1px var(--border); }
+.out { padding:8px 14px 16px; white-space:pre-wrap; word-break:break-word; }
+.out .l-out { color:var(--fg); } .out .l-err { color:var(--err); }
+.out .l-warn { color:var(--warn); }
+.out .l-info { color:var(--info); } .out .l-dim { color:var(--muted); }
+.out .l-ok { color:var(--ok); }
+.prob { display:grid; grid-template-columns:1fr auto; gap:4px 12px; padding:8px 14px;
+  border-bottom:1px solid var(--border); width:100%; text-align:left; position:relative; }
+.prob:hover { background:var(--hover); }
+.prob .msg { color:var(--fg); }
+.prob .loc { color:var(--muted); font-size:11.5px; }
+.prob[data-sev="err"] .bar { background:var(--err); } .prob[data-sev="warn"] .bar { background:var(--warn); }
+.prob[data-sev="info"] .bar { background:var(--info); }
+.prob .bar { position:absolute; left:0; top:0; bottom:0; width:2px; }
+.vlist { padding:6px 0; }
+.vrow { display:flex; align-items:center; gap:8px; width:100%; min-height:30px; text-align:left;
+  padding:5px 14px; color:var(--muted); }
+.vrow:hover { background:var(--hover); color:var(--fg); }
+.vrow[aria-current="true"] { background:var(--fg-soft); color:var(--fg); }
+.vrow .s { margin-left:auto; font-size:11px; }
+.empty { padding:22px 16px; color:var(--muted); font-family:var(--font-body); font-size:13px; }
+.term { display:flex; flex-direction:column; height:100%; }
+.term-line { padding:3px 14px; white-space:pre-wrap; }
+.term-line .p { color:var(--ok); }
+
+/* ═══ 5. 状态栏 ═══════════════════════════════════════════════════════ */
+.statusbar { height:24px; flex:none; display:flex; align-items:center; gap:2px; padding-inline:6px;
+  background:var(--sunken); border-top:1px solid var(--border); color:var(--muted);
+  font-family:var(--font-mono); font-size:11.5px; overflow-x:auto; scrollbar-width:none; }
+.statusbar::-webkit-scrollbar { display:none; }
+.statusbar button { color:var(--muted); padding:0 8px; height:100%; display:flex; align-items:center; gap:5px; white-space:nowrap; }
+.statusbar button:hover { background:var(--hover); color:var(--fg); }
+.statusbar .push { margin-left:auto; }
+.statusbar svg { width:12px; height:12px; }
+.statusbar .sev { color:var(--err); }
+
+/* ═══ 6. 浮层：下拉 / 命令面板 / 对话框 / 右键菜单 / toast ═══════════ */
+.scrim { position:fixed; inset:0; z-index:80; }
+.menu { position:fixed; z-index:90; min-width:250px; padding:5px; background:var(--surface);
+  border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow); }
+.mi { display:flex; align-items:center; gap:10px; width:100%; min-height:30px; padding:0 9px;
+  border-radius:5px; font-size:13px; text-align:left; color:var(--fg); }
+.mi:hover { background:var(--hover); }
+.mi .k { margin-left:auto; }
+.mi[disabled] { color:var(--muted); cursor:default; } .mi[disabled]:hover { background:none; }
+.mi.danger:hover { background:color-mix(in oklch, var(--err) 26%, transparent); color:var(--fg); }
+.msep { height:1px; margin:5px 8px; background:var(--border); }
+.mlabel { padding:5px 9px 3px; font-size:10.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); }
+.chk { display:inline-block; width:14px; }
+
+.palette { position:fixed; z-index:100; top:76px; left:50%; transform:translateX(-50%);
+  width:min(620px, calc(100vw - 32px)); background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; box-shadow:var(--shadow); overflow:hidden; }
+.palette input { width:100%; height:46px; border:0; border-bottom:1px solid var(--border);
+  background:transparent; padding:0 16px; font-size:14.5px; }
+.palette input:focus { outline:none; }
+.palette-list { max-height:min(360px, 46dvh); overflow:auto; padding:5px; }
+.pi { display:flex; align-items:center; gap:10px; width:100%; min-height:34px; padding:0 11px;
+  border-radius:6px; text-align:left; font-size:13.5px; }
+.pi[aria-selected="true"] { background:var(--accent-soft); box-shadow:inset 0 0 0 1px var(--border); }
+.pi .k { margin-left:auto; }
+.pi .cat { font-family:var(--font-mono); font-size:10.5px; color:var(--muted); letter-spacing:.06em; }
+
+.dialog { position:fixed; z-index:100; top:50%; left:50%; transform:translate(-50%,-50%);
+  width:min(520px, calc(100vw - 32px)); background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; box-shadow:var(--shadow); overflow:hidden; }
+.dialog h3 { margin:0; padding:14px 18px; font-size:14px; font-weight:600; border-bottom:1px solid var(--border); }
+.dialog-body { padding:16px 18px; display:flex; flex-direction:column; gap:14px; max-height:min(60dvh,460px); overflow:auto; }
+.dialog-foot { display:flex; gap:8px; justify-content:flex-end; padding:12px 18px; border-top:1px solid var(--border); }
+.frow { display:grid; grid-template-columns:132px 1fr; gap:8px 12px; align-items:center; }
+.frow > label { font-size:12.5px; color:var(--muted); }
+.fin { height:32px; width:100%; background:var(--sunken); border:1px solid var(--border);
+  border-radius:6px; padding:0 10px; font-size:13px; }
+.fin:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+select.fin { height:32px; }
+.fnote { grid-column:2; font-size:11.5px; color:var(--muted); margin-top:-4px; }
+.fgroup { display:flex; gap:8px; }
+.kbd-table { width:100%; border-collapse:collapse; font-size:13px; }
+.kbd-table td { padding:6px 0; border-bottom:1px solid var(--border); }
+.kbd-table td:last-child { text-align:right; white-space:nowrap; }
+
+.toast { position:fixed; z-index:120; left:50%; bottom:44px; transform:translate(-50%,16px);
+  max-width:min(420px, calc(100vw - 32px)); text-align:center;
+  background:var(--fg); color:var(--bg); font-size:13px; padding:9px 16px; border-radius:999px;
+  box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease; }
+.toast.on { opacity:1; transform:translate(-50%,0); }
+.toast[data-t="error"] { background:var(--err); color:oklch(0.20 0.035 10.3); }
+.toast[data-t="success"] { background:var(--ok); color:oklch(0.20 0.02 130); }
+
+/* ═══ 7. 设计说明区（种子排版） ═══════════════════════════════════════ */
+.spec { border-top:1px solid var(--border); }
+.container { max-width:1080px; margin-inline:auto; padding-inline:var(--gutter); }
+.section { padding-block:clamp(48px,7vw,88px); }
+.eyebrow { font-family:var(--font-mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--accent); margin:0 0 var(--gap-md); }
+.h1, h1 { font-family:var(--font-display); font-size:clamp(34px, 4.4vw, 54px); line-height:1.14;
+  letter-spacing:-.02em; margin:0; }
+.h2, h2 { font-family:var(--font-display); font-size:clamp(28px,3.4vw,40px); line-height:1.12;
+  letter-spacing:-.015em; margin:0; }
+.h3, h3 { font-size:19px; font-weight:600; line-height:1.3; margin:0; }
+.lead { font-size:18px; line-height:1.6; color:var(--muted); max-width:60ch; margin:0; }
+.grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--gap-lg); }
+.feature .feature-mark { width:36px; height:36px; display:grid; place-items:center;
+  border:1px solid var(--border); border-radius:10px; color:var(--fg); margin-bottom:var(--gap-md); }
+.feature .feature-mark svg { width:18px; height:18px; }
+.feature p { margin:6px 0 0; color:var(--muted); font-size:14.5px; }
+.stack { display:flex; flex-direction:column; }
+.log-row { display:grid; grid-template-columns:112px 1fr 96px; gap:var(--gap-lg); padding:20px 0;
+  border-top:1px solid var(--border); align-items:baseline; }
+.log-row .pull { text-align:right; }
+.row-between { display:flex; align-items:baseline; justify-content:space-between;
+  gap:var(--gap-md); flex-wrap:wrap; }
+.meta { font-family:var(--font-mono); font-size:12.5px; color:var(--muted); }
+.ds-table { width:100%; border-collapse:collapse; font-size:14px; }
+.ds-table th, .ds-table td { padding:11px 14px; text-align:left; border-bottom:1px solid var(--border); }
+.ds-table th { color:var(--muted); font-weight:500; font-family:var(--font-mono); font-size:11.5px;
+  letter-spacing:.06em; text-transform:uppercase; }
+.ds-table tbody tr:hover { background:var(--fg-soft); }
+.swatch { display:inline-block; width:13px; height:13px; border-radius:3px; margin-right:8px;
+  vertical-align:-2px; border:1px solid var(--border); }
+.pagefoot { padding-block:var(--gap-lg); border-top:1px solid var(--border);
+  color:var(--muted); font-size:12.5px; font-family:var(--font-mono); }
+@media (max-width:920px){
+  .grid-3 { grid-template-columns:1fr; }
+  .log-row { grid-template-columns:1fr; gap:6px; }
+  .log-row .pull { text-align:left; }
+}
+
+/* ═══ 8. 响应式：窄屏 IDE ═════════════════════════════════════════════ */
+@media (max-width:920px){
+  .menubar { overflow-x:auto; scrollbar-width:none; } .menubar::-webkit-scrollbar{display:none;}
+  .menubar-right .state-chip, .menubar-right .btn-outline kbd { display:none; }
+  .explorer { position:absolute; z-index:40; top:0; bottom:0; left:48px; width:min(280px,80vw);
+    box-shadow:var(--shadow); }
+  .workbench { position:relative; }
+  .brand span { display:none; }
+  .statusbar .opt { display:none; }
+}
+@media (pointer:coarse){
+  .mi { min-height:44px; } .tree-row { min-height:40px; }
+  .btn { height:34px; } .rail-btn { width:48px; height:48px; }
+  .panel-tab, .seg { padding-block:8px; }
+}
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important; } }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ IDE 外壳 ═══════════════ -->
+<div class="ide" data-od-id="ide-shell">
+
+  <!-- 菜单栏 -->
+  <div class="menubar" data-od-id="menubar">
+    <span class="brand" data-od-id="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="oklch(0.7190 0.1322 264.2)"/><text x="16" y="21" text-anchor="middle" fill="oklch(0.2263 0.0214 280.5)" font-size="16" font-weight="700" font-family="Geist,system-ui,sans-serif">D</text></svg>
+      <span>Doge IDE+</span>
+    </span>
+    <nav class="menu-list" id="menuList" role="menubar" aria-label="主菜单" data-od-id="menu-list"></nav>
+    <span class="menubar-spacer"></span>
+    <div class="menubar-right">
+      <span class="state-chip" id="runState" data-s="idle" data-od-id="run-state"><span class="dot"></span><span id="runStateText">就绪 · 工具链未导入</span></span>
+      <button class="btn btn-outline" id="debugBtn" data-od-id="btn-debug" title="断点调试（F5）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+        调试 <kbd>F5</kbd>
+      </button>
+      <button class="btn btn-primary" id="runBtn" data-od-id="btn-run" title="运行当前文件（Ctrl+Enter）">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        运行 <kbd>Ctrl+↵</kbd>
+      </button>
+    </div>
+  </div>
+
+  <!-- 工作台 -->
+  <div class="workbench" data-od-id="workbench">
+
+    <!-- 活动栏 -->
+    <div class="rail" id="rail" role="toolbar" aria-orientation="vertical" aria-label="活动栏" data-od-id="activity-rail"></div>
+
+    <!-- 资源管理器 -->
+    <aside class="explorer" id="explorer" data-od-id="explorer">
+      <div class="side-head">
+        <span class="title" id="explorerTitle">资源管理器</span>
+        <button class="btn-icon" data-cmd="file.newFile" title="新建文件（Ctrl+N）" aria-label="新建文件" data-od-id="explorer-new-file">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 12v5M9.5 14.5h5"/></svg>
+        </button>
+        <button class="btn-icon" data-cmd="file.save" title="保存项目到目录（Ctrl+S）" aria-label="保存项目" data-od-id="explorer-save">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+        </button>
+        <button class="btn-icon" data-cmd="view.explorer" title="隐藏资源管理器（Ctrl+B）" aria-label="隐藏资源管理器">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
+      </div>
+      <div class="tree" id="tree" data-od-id="file-tree" role="tree" aria-label="项目文件"></div>
+      <div class="side-foot"><span id="fileCount">0 个文件</span><span id="projLang">C17</span></div>
+    </aside>
+    <div class="vsplit" id="vsplit" role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="调整资源管理器宽度" data-od-id="resizer-explorer"></div>
+
+    <!-- 编辑器列 -->
+    <div class="editor-col" data-od-id="editor">
+      <div class="tabs" id="tabs" role="tablist" aria-label="打开的文件" data-od-id="editor-tabs"></div>
+      <div class="breadcrumb" data-od-id="breadcrumb">
+        <span id="bcProj">DogeDemo</span><span class="sep">›</span><span id="bcDir">src</span>
+        <span class="sep">›</span><span class="cur" id="bcFile">main.c</span><span class="lang" id="bcLang">C · C17</span>
+      </div>
+      <div class="code" id="code" data-od-id="code-surface"></div>
+
+      <div class="stdin" id="stdin" data-open="true" data-od-id="stdin-drawer">
+        <button class="stdin-head" id="stdinHead" aria-expanded="true" aria-controls="stdinArea" data-od-id="stdin-toggle">
+          <svg class="caret" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 10l5 5 5-5z"/></svg>
+          <span>标准输入 stdin</span><span class="hint" id="stdinHint">Ctrl+I 折叠 · 运行时写入进程</span>
+        </button>
+        <textarea id="stdinArea" aria-label="标准输入" placeholder="在这里输入标准输入内容…">Doge
+</textarea>
+      </div>
+    </div>
+
+    <div class="hsplit" id="hsplit" role="separator" aria-orientation="horizontal" tabindex="0"
+         aria-label="调整底部面板高度" data-od-id="resizer-panel"></div>
+
+    <!-- 底部面板 -->
+    <section class="panel" id="panel" data-open="true" aria-label="底部面板" data-od-id="bottom-panel">
+      <div class="panel-tabs" id="panelTabs" role="tablist" aria-label="面板视图" data-od-id="panel-tabs">
+        <button class="btn-icon" data-cmd="view.panel" title="隐藏面板（Ctrl+J）" aria-label="隐藏面板" style="margin-right:6px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div class="panel-body" id="panelBody"></div>
+    </section>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="statusbar" data-od-id="statusbar">
+    <button data-cmd="file.save" title="保存项目到目录（Ctrl+S）" aria-label="保存项目到目录" data-od-id="status-save">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/></svg>
+    </button>
+    <button class="opt" data-cmd="debug.toggleBp" title="切换断点（F9）">断点 <span id="bpCount">2</span></button>
+    <button class="opt" data-cmd="panel.problems" title="切换到问题面板">问题 <span class="sev" id="probCount">2</span></button>
+    <button class="push" id="cursorPos" title="光标位置">Ln 13, Col 27</button>
+    <button class="opt" data-cmd="view.fontUp" title="增大编辑器字号（Ctrl+=）">A+</button>
+    <button class="opt" data-cmd="view.fontDown" title="减小编辑器字号（Ctrl+-）">A−</button>
+    <span class="opt" style="padding:0 8px;">UTF-8</span>
+    <span class="opt" style="padding:0 8px;">空格=4</span>
+    <button data-cmd="help.about" title="关于 Doge IDE+">Doge IDE+ 1.0.2</button>
+  </div>
+</div>
+
+<div id="layer"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- ═══════════════ 设计说明 ═══════════════ -->
+<div class="spec">
+  <section class="section" data-od-id="spec-hero">
+    <div class="container stack" style="gap:var(--gap-md); max-width:min(820px, 100%);">
+      <p class="eyebrow">DOGE IDE+ · 界面参考原型</p>
+      <h1>散落的按钮，收进一条菜单栏。</h1>
+      <p class="lead">旧版把能力压在顶栏一排小图标和项目面板头部的「＋ － ‹」上；新版用标准六菜单（文件 / 编辑 / 运行 / 视图 / 调试 / 帮助）加命令面板承接，功能不减，顶栏与面板头的 11 个散点收敛到 2 处。上方可直接操作：打开文件菜单、右键文件、拖动分隔线、按 Ctrl+Shift+P。</p>
+    </div>
+  </section>
+
+  <section class="section" style="border-top:1px solid var(--border)" data-od-id="spec-features">
+    <div class="container stack" style="gap:48px;">
+      <div style="max-width:min(620px, 100%);">
+        <p class="eyebrow">改了什么</p>
+        <h2>三个结构性决定，而不是换皮。</h2>
+      </div>
+      <div class="grid-3">
+        <div class="feature" data-od-id="feature-menu">
+          <div class="feature-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h9"/></svg></div>
+          <h3>入口上收到菜单栏</h3>
+          <p>新建文件从项目面板头部的「+」移到 File 菜单，同时保留 Ctrl+N 与面板头图标三条路径，键盘、鼠标、触屏都能到。</p>
+        </div>
+        <div class="feature" data-od-id="feature-palette">
+          <div class="feature-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9l-2 3 2 3M16 9l2 3-2 3"/></svg></div>
+          <h3>命令面板兜住长尾</h3>
+          <p>Ctrl+Shift+P 汇总全部 38 条命令，支持模糊匹配。任何原来只能靠记忆快捷键才能触发的操作都能被搜到。</p>
+        </div>
+        <div class="feature" data-od-id="feature-panels">
+          <div class="feature-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 5h18v6H3zM3 13h18v6H3z"/></svg></div>
+          <h3>输出区拆成两级</h3>
+          <p>旧的 stdout / stderr / info / Tasks / debug 五个平级标签，升级为「问题 · 输出 · 调试控制台 · 任务 · 终端」五个面板视图，输出视图内再用分段控件切流。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" style="border-top:1px solid var(--border)" data-od-id="spec-mapping">
+    <div class="container">
+      <div class="row-between" style="margin-bottom:28px;">
+        <h2>入口迁移对照</h2>
+        <span class="meta">完整清单见 IDE-功能迁移说明.md</span>
+      </div>
+      <div>
+        <article class="log-row" data-od-id="map-new-file">
+          <span class="meta">File</span>
+          <div><h3 style="font-size:18px;">新建文件</h3>
+            <p style="margin:4px 0 0; color:var(--muted); font-size:14px;">面板头「+」→ File › 新建文件（Ctrl+N）。原函数 newProjectFile() 逻辑不变，只换触发方式。</p></div>
+          <span class="pull meta">已迁移</span>
+        </article>
+        <article class="log-row" data-od-id="map-delete">
+          <span class="meta">File</span>
+          <div><h3 style="font-size:18px;">删除文件</h3>
+            <p style="margin:4px 0 0; color:var(--muted); font-size:14px;">面板头「−」→ File › 删除当前文件，外加资源管理器右键菜单与 Delete 键。</p></div>
+          <span class="pull meta">已迁移</span>
+        </article>
+        <article class="log-row" data-od-id="map-panel">
+          <span class="meta">View</span>
+          <div><h3 style="font-size:18px;">五个输出标签</h3>
+            <p style="margin:4px 0 0; color:var(--muted); font-size:14px;">改为底部面板视图切换，switchOutputTab() 拆成 switchPanelView() 与 switchStream() 两级。</p></div>
+          <span class="pull meta">需重构</span>
+        </article>
+        <article class="log-row" data-od-id="map-toolchain">
+          <span class="meta">Help</span>
+          <div><h3 style="font-size:18px;">导入运行库</h3>
+            <p style="margin:4px 0 0; color:var(--muted); font-size:14px;">顶栏常驻按钮降级为菜单项，首次未导入时状态栏与命令面板给出同一条提示。</p></div>
+          <span class="pull meta">已迁移</span>
+        </article>
+        <article class="log-row" data-od-id="map-rename-file">
+          <span class="meta">File</span>
+          <div><h3 style="font-size:18px;">重命名文件</h3>
+            <p style="margin:4px 0 0; color:var(--muted); font-size:14px;">旧版没有该能力。新增 renameProjectFile()，与既有 renameProject() 共享校验与提示。</p></div>
+          <span class="pull meta">新增</span>
+        </article>
+      </div>
+      <p class="meta" style="margin:28px 0 0; max-width:70ch; line-height:1.8;">面板中的输出、问题列表与任务队列为原型演示数据（示例工程的编译诊断与运行结果）。接入既有 <span class="mono">requestExecution()</span> 与 <span class="mono">lintDocument()</span> 后由真实响应替换，数据结构已按旧版返回体预留。</p>
+    </div>
+  </section>
+
+  <section class="section" style="border-top:1px solid var(--border)" data-od-id="spec-tokens">
+    <div class="container stack" style="gap:36px;">
+      <div style="max-width:min(620px, 100%);">
+        <p class="eyebrow">设计令牌</p>
+        <h2>色板来自旧版，一个值都没改。</h2>
+      </div>
+      <table class="ds-table" data-od-id="token-table">
+        <thead><tr><th>令牌</th><th>色值</th><th class="mono">OKLch</th><th>层级职责</th></tr></thead>
+        <tbody>
+          <tr><td><span class="swatch" style="background:oklch(0.2263 0.0214 280.5)"></span><span class="mono">--bg</span></td><td class="mono">#1a1b26</td><td class="mono">0.2263 0.0214 280.5</td><td>编辑器与画布底</td></tr>
+          <tr><td><span class="swatch" style="background:oklch(0.2819 0.0355 274.7)"></span><span class="mono">--surface</span></td><td class="mono">#24283b</td><td class="mono">0.2819 0.0355 274.7</td><td>菜单栏 / 面板 / 浮层</td></tr>
+          <tr><td><span class="swatch" style="background:oklch(0.8456 0.0611 274.8)"></span><span class="mono">--fg</span></td><td class="mono">#c0caf5</td><td class="mono">0.8456 0.0611 274.8</td><td>正文与代码</td></tr>
+          <tr><td><span class="swatch" style="background:oklch(0.7666 0.0537 275.5)"></span><span class="mono">--muted</span></td><td class="mono">#a9b1d6</td><td class="mono">0.7666 0.0537 275.5</td><td>次级文本与注释</td></tr>
+          <tr><td><span class="swatch" style="background:oklch(0.3867 0.0537 273.9)"></span><span class="mono">--border</span></td><td class="mono">#3b4261</td><td class="mono">0.3867 0.0537 273.9</td><td>全部发丝分割线</td></tr>
+          <tr><td><span class="swatch" style="background:oklch(0.7190 0.1322 264.2)"></span><span class="mono">--accent</span></td><td class="mono">#7aa2f7</td><td class="mono">0.7190 0.1322 264.2</td><td>唯一强调：运行按钮、焦点环、选中指示</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="pagefoot" data-od-id="spec-footer">
+    <div class="container">Doge IDE+ 1.0.2 · 界面参考原型 · 令牌取自 doge-ide.html 实测值 · 完整迁移清单见 IDE-功能迁移说明.md</div>
+  </footer>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ═══ 数据：项目文件（内容取自旧版 LANGUAGES / defaultProjectFiles） ═══ */
+var FILES = {
+  'src/main.c': { lang:'c', ver:'C17', code:
+'#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include "math.h"\n\nint main() {\n    char name[100];\n    int total;\n    printf("What\'s your name? ");\n    fgets(name, sizeof(name), stdin);\n    // 去掉结尾换行\n    name[strcspn(name, "\\n")] = 0;\n    printf("Hello, %s! Welcome to Doge IDE!\\n", name);\n    printf("2 + 3 = %d\\n", add_numbers(2, 3));\n    return 0;\n}\n' },
+  'src/math.c': { lang:'c', ver:'C17', code:
+'#include "math.h"\n\nint add_numbers(int a, int b) {\n    return a + b;\n}\n\nint clamp_value(int value, int lo, int hi) {\n    if (value < lo) return lo;\n    if (value > hi) return hi;\n    return value;\n}\n' },
+  'src/math.h': { lang:'c', ver:'C17', code:
+'#pragma once\n\nint add_numbers(int a, int b);\nint clamp_value(int value, int lo, int hi);\n' },
+  '.doge-project.json': { lang:'json', ver:'JSON', code:
+'{\n  "name": "DogeDemo",\n  "language": "c",\n  "buildProfile": "debug",\n  "optimization": "0",\n  "defines": ["DEBUG"],\n  "includes": ["include"],\n  "libraries": ["m"]\n}\n' },
+  'README.md': { lang:'md', ver:'Markdown', code:
+'# DogeDemo\n\nDoge IDE+ 的示例工程。\n\n- 入口：`src/main.c`\n- 构建：C17 / O0 Debug-friendly\n- 运行库：Android ARM64，需从 Help › 导入本地运行库 手动导入\n' }
+};
+var ORDER = ['src/main.c','src/math.c','src/math.h','.doge-project.json','README.md'];
+var PROBLEMS = [
+  { sev:'warn', file:'src/main.c', line:8, col:9, msg:'未使用的变量 “total”' },
+  { sev:'info', file:'src/main.c', line:10, col:5, msg:'fgets 返回值未检查，长输入会被静默截断' }
+];
+var TREE = [
+  { type:'folder', name:'src', open:true, children:['src/main.c','src/math.c','src/math.h'] },
+  { type:'file', name:'.doge-project.json' },
+  { type:'file', name:'README.md' }
+];
+var STDOUT = [
+  "What's your name? Doge",
+  "Hello, Doge! Welcome to Doge IDE!",
+  "2 + 3 = 5",
+  "",
+  "进程已退出，代码 0 · 耗时 312 ms"
+];
+var STDERR = [
+  "src/main.c:7:9: warning: unused variable 'total' [-Wunused-variable]",
+  "    7 |     int total;",
+  "      |         ^~~~~"
+];
+var INFO = [
+  "[doge] toolchain: android-arm64 clang 17.0.2 (已导入)",
+  "[doge] target: aarch64-linux-android21 · profile: O0 Debug-friendly",
+  "[doge] defines: DEBUG · includes: include · libraries: m",
+  "[doge] stdin: 已注入 6 字节"
+];
+
+var state = {
+  project:'DogeDemo', file:'src/main.c', open:['src/main.c','src/math.c','src/math.h'],
+  dirty:{}, bp:{ 'src/main.c':[10,13] }, cur:13, stream:'stdout', view:'output',
+  explorer:true, panel:true, stdin:true, font:14, running:false
+};
+try{
+  var s = JSON.parse(localStorage.getItem('doge-ide-modern-v1') || '{}');
+  if (s.font) state.font = s.font;
+  if (s.explorer === false) state.explorer = false;
+  if (s.panel === false) state.panel = false;
+  if (s.stdin === false) state.stdin = false;
+  var w = localStorage.getItem('doge-ide-explorer-w'), h = localStorage.getItem('doge-ide-panel-h');
+  if (w) document.documentElement.style.setProperty('--explorer-w', w + 'px');
+  if (h) document.documentElement.style.setProperty('--panel-h', h + 'px');
+}catch(e){}
+function persist(){
+  try{
+    localStorage.setItem('doge-ide-modern-v1', JSON.stringify(
+      { font:state.font, explorer:state.explorer, panel:state.panel, stdin:state.stdin }));
+  }catch(e){}
+}
+var $ = function(id){ return document.getElementById(id); };
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(msg, type){
+  var t = $('toast'); t.textContent = msg; t.dataset.t = type || 'info';
+  t.classList.add('on'); clearTimeout(toast._t);
+  toast._t = setTimeout(function(){ t.classList.remove('on'); }, 2400);
+}
+
+/* ═══ 语法着色（单遍正则，C / C++ / JSON） ═══ */
+var KW_C = ('int char long short float double void unsigned signed const static struct enum union '+
+  'typedef return if else for while do switch case break continue sizeof goto extern register volatile '+
+  'inline restrict _Bool bool true false NULL').split(' ');
+var KW_CPP = KW_C.concat(['class namespace template typename public private protected virtual new '+
+  'delete using try catch throw operator this nullptr constexpr auto friend explicit']);
+var TYPES = ('FILE size_t ssize_t uint8_t uint32_t int64_t printf scanf fgets fopen fclose malloc free '+
+  'strcmp strlen strcpy memcpy sizeof cout cin endl string getline').split(' ');
+
+function highlight(line, lang){
+  var esc2 = esc;
+  if (lang === 'md' || line.trim() === '') return esc2(line);
+  if (/^\s*#/.test(line)) return '<span class="tk-pp">' + esc2(line) + '</span>';
+  var kws = (lang === 'cpp' ? KW_CPP : KW_C), out = '', last = 0, re, m;
+  re = /(\/\/.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)|(\s+)|([{}()[\];,]|<>=!+\-*\/%&|^~?:.]+)/g;
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) out += esc2(line.slice(last, m.index));
+    var t = m[0];
+    if (m[1]) out += '<span class="tk-cm">' + esc2(t) + '</span>';
+    else if (m[2]) out += '<span class="tk-str">' + esc2(t) + '</span>';
+    else if (m[3]) out += '<span class="tk-num">' + esc2(t) + '</span>';
+    else if (m[4]) {
+      var peek = line.slice(re.lastIndex).match(/^\s*\(/);
+      if (kws.indexOf(t) >= 0) out += '<span class="tk-kw">' + esc2(t) + '</span>';
+      else if (TYPES.indexOf(t) >= 0) out += '<span class="tk-ty">' + esc2(t) + '</span>';
+      else if (t === 'total') out += '<span class="squiggle">' + esc2(t) + '</span>';
+      else if (peek) out += '<span class="tk-fn">' + esc2(t) + '</span>';
+      else out += esc2(t);
+    }
+    else if (m[5]) out += t;
+    else out += '<span class="tk-pn">' + esc2(t) + '</span>';
+    last = re.lastIndex;
+  }
+  out += esc2(line.slice(last));
+  return out;
+}
+
+/* ═══ 菜单模型：一份数据同时喂菜单栏、下拉与命令面板 ═══ */
+var MENUS = [
+  { id:'file', label:'文件', items:[
+    { l:'新建文件', k:'Ctrl+N', a:'file.newFile' },
+    { l:'新建项目…', k:'Ctrl+Shift+N', a:'file.newProject' },
+    { l:'打开项目…', k:'Ctrl+O', a:'file.open' },
+    { l:'保存项目到目录', k:'Ctrl+S', a:'file.save' },
+    { l:'重命名项目…', a:'file.renameProject' },
+    { s:1 },
+    { l:'重命名当前文件', k:'F2', a:'file.renameFile' },
+    { l:'删除当前文件', a:'file.delete' },
+    { l:'关闭文件', k:'Ctrl+W', a:'file.close' },
+    { s:1 },
+    { l:'退出', a:'file.quit' }
+  ]},
+  { id:'edit', label:'编辑', items:[
+    { l:'撤销', k:'Ctrl+Z', a:'edit.undo' }, { l:'重做', k:'Ctrl+Shift+Z', a:'edit.redo' },
+    { s:1 },
+    { l:'剪切', k:'Ctrl+X', a:'edit.cut' }, { l:'复制', k:'Ctrl+C', a:'edit.copy' },
+    { l:'粘贴', k:'Ctrl+V', a:'edit.paste' },
+    { s:1 },
+    { l:'代码补全', k:'Ctrl+Space', a:'edit.complete' },
+    { l:'格式化文档', k:'Shift+Alt+F', a:'edit.format' },
+    { s:1 },
+    { l:'查找', k:'Ctrl+F', a:'edit.find' }, { l:'替换', k:'Ctrl+H', a:'edit.replace' }
+  ]},
+  { id:'run', label:'运行', items:[
+    { l:'运行当前文件', k:'Ctrl+Enter', a:'run.run' },
+    { l:'以任务方式运行', k:'Ctrl+Shift+B', a:'run.task' },
+    { l:'取消执行', k:'Esc', a:'run.cancel' },
+    { s:1 },
+    { l:'清空控制台', k:'Ctrl+L', a:'run.clear' }
+  ]},
+  { id:'view', label:'视图', items:[
+    { l:'资源管理器', k:'Ctrl+B', a:'view.explorer', chk:function(){ return state.explorer; } },
+    { l:'底部面板', k:'Ctrl+J', a:'view.panel', chk:function(){ return state.panel; } },
+    { l:'标准输入', k:'Ctrl+I', a:'view.stdin', chk:function(){ return state.stdin; } },
+    { s:1 },
+    { l:'增大编辑器字号', a:'view.fontUp' }, { l:'减小编辑器字号', a:'view.fontDown' },
+    { s:1 },
+    { l:'重置布局', a:'view.reset' }
+  ]},
+  { id:'debug', label:'调试', items:[
+    { l:'开始调试', k:'F5', a:'debug.start' },
+    { s:1 },
+    { l:'切换断点', k:'F9', a:'debug.toggleBp' },
+    { l:'下一断点', k:'F10', a:'debug.next' },
+    { l:'清除所有断点', a:'debug.clearBp' },
+    { s:1 },
+    { l:'打开调试控制台', a:'debug.console' }
+  ]},
+  { id:'help', label:'帮助', items:[
+    { l:'键盘快捷键', a:'help.shortcuts' },
+    { s:1 },
+    { l:'导入本地运行库', a:'help.toolchain' },
+    { l:'导入离线依赖包', a:'help.deps' },
+    { s:1 },
+    { l:'设置…', k:'Ctrl+,', a:'help.settings' },
+    { l:'关于 Doge IDE+', a:'help.about' }
+  ]}
+];
+
+var RAIL = [
+  { id:'files', label:'资源管理器', k:'Ctrl+B', a:'view.explorer',
+    svg:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>' },
+  { id:'search', label:'搜索', k:'Ctrl+Shift+F', a:'go.search',
+    svg:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>' },
+  { id:'scm', label:'源代码管理', a:'go.scm',
+    svg:'<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M8.4 7.2l7.2 3.6M8.4 16.8l7.2-3.6"/>' },
+  { id:'run', label:'运行和调试', k:'Ctrl+Shift+D', a:'go.debug', badge:'2',
+    svg:'<path d="M8 5l11 7-11 7z"/><path d="M4 5v14"/>' },
+  { id:'ext', label:'扩展', a:'go.ext',
+    svg:'<path d="M4 7h6l2 2h8v10H4z"/><path d="M9 12h6"/>' }
+];
+
+var ALL = [];
+MENUS.forEach(function(m){ m.items.forEach(function(it){ if (it.a) ALL.push({ label:it.l, key:it.a, k:it.k, cat:m.label }); }); });
+
+/* ═══ 渲染：菜单栏 ═══ */
+function renderMenus(){
+  var nav = $('menuList'); nav.innerHTML = '';
+  MENUS.forEach(function(m){
+    var b = document.createElement('button');
+    b.className = 'menu-btn'; b.type = 'button'; b.textContent = m.label;
+    b.setAttribute('aria-haspopup','true'); b.setAttribute('aria-expanded','false');
+    b.dataset.menu = m.id; b.dataset.od = 'menu-' + m.id;
+    b.addEventListener('click', function(e){
+      e.stopPropagation();
+      openMenu(m.id, b.getBoundingClientRect());
+    });
+    b.addEventListener('mouseenter', function(){
+      if (layer.firstChild && layer.dataset.kind === 'menu' && !b.getAttribute('aria-expanded')) openMenu(m.id, b.getBoundingClientRect());
+    });
+    nav.appendChild(b);
+  });
+}
+function closeMenus(){
+  layer.innerHTML = '';
+  Array.prototype.forEach.call(document.querySelectorAll('.menu-btn'), function(b){ b.setAttribute('aria-expanded','false'); });
+}
+function openMenu(id, rect){
+  var menu = MENUS.filter(function(m){ return m.id === id; })[0];
+  if (!menu) return;
+  layer.innerHTML = '';
+  layer.dataset.kind = 'menu';
+  var box = document.createElement('div');
+  box.className = 'menu'; box.setAttribute('role','menu');
+  box.style.top = (rect.bottom + 4) + 'px';
+  box.style.left = Math.max(8, Math.min(rect.left, innerWidth - 262)) + 'px';
+  box.dataset.od = 'menu-dropdown-' + id;
+  menu.items.forEach(function(it){
+    if (it.s) { var d = document.createElement('div'); d.className = 'msep'; box.appendChild(d); return; }
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'mi'; b.setAttribute('role','menuitem');
+    var on = it.chk ? it.chk() : null;
+    b.innerHTML = '<span>' + (on === null ? '' : '<span class="chk" aria-hidden="true">' + (on ? '✓' : '') + '</span>') +
+      esc(it.l) + '</span>' + (it.k ? '<kbd class="k">' + esc(it.k) + '</kbd>' : '');
+    if (on !== null) b.setAttribute('aria-checked', on ? 'true' : 'false');
+    if (it.a === 'file.delete') b.classList.add('danger');
+    b.addEventListener('click', function(){ closeMenus(); run(it.a); });
+    box.appendChild(b);
+  });
+  layer.appendChild(box);
+  var owner = document.querySelector('.menu-btn[data-menu="' + id + '"]');
+  if (owner) owner.setAttribute('aria-expanded','true');
+  var h = box.offsetHeight;
+  if (rect.bottom + 4 + h > innerHeight - 24) box.style.top = Math.max(8, innerHeight - 24 - h) + 'px';
+}
+
+/* ═══ 浮层通用 ═══ */
+var layer = $('layer');
+function overlay(kind, node){
+  layer.innerHTML = ''; layer.dataset.kind = kind;
+  layer.appendChild(node);
+  var sc = document.createElement('div');
+  sc.className = 'scrim';
+  sc.addEventListener('mousedown', function(){ closeOverlays(); });
+  layer.appendChild(sc);
+}
+function closeOverlays(){ layer.innerHTML = ''; layer.dataset.kind = ''; closeMenus(); }
+
+/* ═══ 命令面板 ═══ */
+var palIndex = 0, palList = [];
+function openPalette(prefill){
+  var box = document.createElement('div');
+  box.className = 'palette'; box.setAttribute('role','dialog'); box.setAttribute('aria-label','命令面板');
+  box.dataset.od = 'command-palette';
+  box.innerHTML = '<input id="palInput" placeholder="输入命令名称…" aria-label="搜索命令" autocomplete="off" spellcheck="false"><div class="palette-list" id="palList" role="listbox"></div>';
+  overlay('palette', box);
+  var input = $('palInput');
+  function draw(){
+    var q = input.value.trim().toLowerCase();
+    palList = ALL.filter(function(c){
+      if (!q) return true;
+      return (c.label + ' ' + c.cat).toLowerCase().indexOf(q) >= 0;
+    });
+    palIndex = 0;
+    var ul = $('palList'); ul.innerHTML = '';
+    if (!palList.length) { ul.innerHTML = '<div class="empty">没有匹配「' + esc(input.value) + '」的命令</div>'; return; }
+    palList.forEach(function(c, i){
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'pi'; b.setAttribute('role','option');
+      b.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
+      b.innerHTML = '<span>' + esc(c.label) + '</span><span class="cat">' + esc(c.cat) +
+        '</span>' + (c.k ? '<kbd class="k">' + esc(c.k) + '</kbd>' : '');
+      b.addEventListener('click', function(){ closeOverlays(); run(c.key); });
+      ul.appendChild(b);
+    });
+  }
+  input.addEventListener('input', draw);
+  input.addEventListener('keydown', function(e){
+    var items = $('palList').querySelectorAll('.pi');
+    if (!items.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      palIndex = (palIndex + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      Array.prototype.forEach.call(items, function(n, i){ n.setAttribute('aria-selected', i === palIndex ? 'true' : 'false'); });
+      var cur = items[palIndex];
+      if (cur) $('palList').scrollTop = cur.offsetTop - $('palList').clientHeight / 2;
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (palList[palIndex]) { var k = palList[palIndex].key; closeOverlays(); run(k); }
+    } else if (e.key === 'Escape') { e.preventDefault(); closeOverlays(); }
+  });
+  if (prefill) input.value = prefill;
+  draw();
+  input.focus();
+}
+
+/* ═══ 对话框：快捷键 / 设置 / 关于 ═══ */
+function openDialog(kind){
+  var box = document.createElement('div');
+  box.className = 'dialog'; box.setAttribute('role','dialog'); box.setAttribute('aria-modal','true');
+  if (kind === 'shortcuts') {
+    box.dataset.od = 'dialog-shortcuts';
+    var rows = [
+      ['运行当前文件','Ctrl + Enter'],['以任务方式运行','Ctrl + Shift + B'],
+      ['开始调试','F5'],['切换断点','F9'],['下一断点','F10'],
+      ['新建文件','Ctrl + N'],['新建项目','Ctrl + Shift + N'],['打开项目','Ctrl + O'],
+      ['保存项目到目录','Ctrl + S'],['重命名文件','F2'],['关闭文件','Ctrl + W'],
+      ['撤销 / 重做','Ctrl + Z / Ctrl + Shift + Z'],['代码补全','Ctrl + Space'],
+      ['命令面板','Ctrl + Shift + P'],['查找 / 替换','Ctrl + F / Ctrl + H'],
+      ['清空控制台','Ctrl + L'],['标准输入抽屉','Ctrl + I'],
+      ['资源管理器','Ctrl + B'],['底部面板','Ctrl + J'],
+      ['增大 / 减小编辑器字号','Ctrl + = / Ctrl + -'],['关闭最上层浮层','Esc']
+    ];
+    box.innerHTML = '<h3>键盘快捷键</h3><div class="dialog-body"><table class="kbd-table"><tbody>' +
+      rows.map(function(r){ return '<tr><td>' + esc(r[0]) + '</td><td><kbd>' + esc(r[1]) + '</kbd></td></tr>'; }).join('') +
+      '</tbody></table></div><div class="dialog-foot"><button class="btn btn-primary" data-x>知道了</button></div>';
+  } else if (kind === 'settings') {
+    box.dataset.od = 'dialog-settings';
+    box.innerHTML = '<h3>设置</h3><div class="dialog-body">' +
+      row('超时 timeout', '<input class="fin" id="setTimeout" type="number" min="1000" max="30000" step="1000" value="30000"><div class="fnote">上限 30000 ms（30 秒），对应旧版 timeoutInput</div>') +
+      row('编辑器字号', '<input class="fin" id="setFont" type="number" min="11" max="24" step="1" value="' + state.font + '"><div class="fnote">同时作用于编辑器、stdin 与输出区</div>') +
+      row('构建档', '<select class="fin" id="setOpt"><option value="0">O0 · Debug-friendly</option><option value="1">O1</option><option value="2">O2 · Balanced</option><option value="3">O3 · Fast</option><option value="s">Os · Small</option></select>') +
+      row('宏定义', '<input class="fin" id="setDefines" placeholder="DEBUG,NAME=value" value="DEBUG">') +
+      row('include 路径', '<input class="fin" id="setIncludes" placeholder="include,third_party/include" value="include">') +
+      row('链接库', '<input class="fin" id="setLibs" placeholder="m,custom" value="m">') +
+      row('本地运行库', '<div class="fgroup"><button class="btn btn-outline" data-a="help.toolchain">导入资源包 (.zip)</button></div><div class="fnote" id="setTc">首次运行前导入 Android ARM64 C/C++ 资源包</div>') +
+      row('离线依赖包', '<div class="fgroup"><button class="btn btn-outline" data-a="help.deps">导入依赖包</button></div><div class="fnote">配置写入 .doge-project.json，用于下一次构建</div>') +
+      '</div><div class="dialog-foot"><button class="btn btn-outline" data-x>取消</button><button class="btn btn-primary" data-save>保存</button></div>';
+  } else {
+    box.dataset.od = 'dialog-about';
+    box.innerHTML = '<h3>关于 Doge IDE+</h3><div class="dialog-body">' +
+      '<p style="margin:0">本地 C / C++ 编程环境，面向 Android ARM64 目标。运行库需手动导入，不联网。</p>' +
+      '<p class="meta" style="margin:0">编辑器 CodeMirror 6 · 字体 Geist + Maple Mono · 界面令牌见 brand-spec.md</p>' +
+      '</div><div class="dialog-foot"><button class="btn btn-primary" data-x>关闭</button></div>';
+  }
+  function row(label, control){
+    return '<div class="frow"><label>' + esc(label) + '</label>' + control + '</div>';
+  }
+  overlay('dialog', box);
+  box.querySelectorAll('[data-x]').forEach(function(b){ b.addEventListener('click', closeOverlays); });
+  box.querySelectorAll('[data-a]').forEach(function(b){
+    b.addEventListener('click', function(){ closeOverlays(); run(b.dataset.a); });
+  });
+  var save = box.querySelector('[data-save]');
+  if (save) save.addEventListener('click', function(){
+    state.font = Math.max(11, Math.min(24, Number($('setFont').value) || 14));
+    document.documentElement.style.setProperty('--code-size', state.font + 'px');
+    persist(); closeOverlays();
+    toast('设置已保存到 .doge-project.json', 'success');
+  });
+  var first = box.querySelector('.dialog-foot .btn-primary');
+  if (first) first.focus();
+}
+
+/* ═══ 资源管理器 ═══ */
+var ICO_FILE = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>';
+var ICO_CARET = '<path d="M7 10l5 5 5-5z"/>';
+function fileIcon(path){
+  var ext = (path.split('.').pop() || '').toLowerCase();
+  if (ext === 'json') return '<circle cx="12" cy="12" r="8"/><path d="M9 12h6"/>';
+  if (ext === 'md') return '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>';
+  if (ext === 'h' || ext === 'hpp') return '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M10 13v4M8.5 15h3"/>';
+  return ICO_FILE;
+}
+function renderTree(){
+  var root = $('tree'); root.innerHTML = '';
+  TREE.forEach(function(node){
+    if (node.type === 'folder') {
+      var fb = document.createElement('button');
+      fb.type = 'button'; fb.className = 'tree-row'; fb.setAttribute('role','treeitem');
+      fb.setAttribute('aria-expanded', node.open ? 'true' : 'false');
+      fb.dataset.open = node.open ? 'true' : 'false';
+      fb.innerHTML = '<svg class="caret" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' + ICO_CARET +
+        '</svg><svg class="ficon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="label">' + esc(node.name) + '</span>';
+      fb.addEventListener('click', function(){
+        node.open = !node.open;
+        fb.dataset.open = node.open ? 'true' : 'false';
+        fb.setAttribute('aria-expanded', node.open ? 'true' : 'false');
+        wrap.hidden = !node.open;
+      });
+      root.appendChild(fb);
+      var wrap = document.createElement('div');
+      wrap.className = 'tree-children'; wrap.setAttribute('role','group'); wrap.hidden = !node.open;
+      node.children.forEach(function(p){ wrap.appendChild(fileRow(p, '    ')); });
+      root.appendChild(wrap);
+    } else {
+      root.appendChild(fileRow(node.name, ''));
+    }
+  });
+  $('fileCount').textContent = ORDER.length + ' 个文件';
+  $('projLang').textContent = 'C · C17';
+  $('explorerTitle').innerHTML = '<b>' + esc(state.project) + '</b>';
+}
+function fileRow(path, pad){
+  var b = document.createElement('button');
+  b.type = 'button'; b.className = 'tree-row'; b.setAttribute('role','treeitem');
+  b.dataset.path = path; b.dataset.od = 'file-' + path.replace(/[^\w]/g,'-');
+  if (path === state.file) b.setAttribute('aria-current','true');
+  b.style.paddingLeft = (10 + (pad ? 18 : 0)) + 'px';
+  b.innerHTML = '<svg class="ficon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' +
+    fileIcon(path) + '</svg><span class="label">' + esc(path.split('/').pop()) + '</span>' +
+    ((state.dirty[path]) ? '<span class="dot" title="未保存"></span>' : '');
+  b.addEventListener('click', function(){ openFile(path); });
+  b.addEventListener('contextmenu', function(e){ e.preventDefault(); openFileContext(e, path); });
+  return b;
+}
+function openFile(path){
+  if (!FILES[path]) { toast('文件不存在：' + path, 'error'); return; }
+  if (state.open.indexOf(path) < 0) state.open.push(path);
+  state.file = path; renderAll();
+}
+function openFileContext(e, path){
+  openFile(path);
+  var items = [
+    { l:'新建文件', a:'file.newFile' },
+    { l:'新建同级文件', a:'file.newFile' },
+    { l:'复制相对路径', a:'noop' },
+    { s:1 },
+    { l:'重命名', k:'F2', a:'file.renameFile' },
+    { l:'删除', a:'file.delete' }
+  ];
+  contextMenu(e.clientX, e.clientY, items, 'ctx-file');
+}
+function contextMenu(x, y, items, od){
+  layer.innerHTML = '';
+  var box = document.createElement('div');
+  box.className = 'menu'; box.setAttribute('role','menu'); box.dataset.od = od;
+  box.style.left = Math.min(x, innerWidth - 250) + 'px';
+  box.style.top = Math.min(y, innerHeight - 210) + 'px';
+  items.forEach(function(it){
+    if (it.s) { var d = document.createElement('div'); d.className = 'msep'; box.appendChild(d); return; }
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'mi'; b.setAttribute('role','menuitem');
+    if (it.a === 'file.delete') b.classList.add('danger');
+    b.innerHTML = '<span>' + esc(it.l) + '</span>' + (it.k ? '<kbd class="k">' + esc(it.k) + '</kbd>' : '');
+    b.addEventListener('click', function(){
+      closeOverlays();
+      if (it.a === 'noop') { copyPath(); return; }
+      run(it.a);
+    });
+    box.appendChild(b);
+  });
+  layer.appendChild(box);
+  layer.dataset.kind = 'ctx';
+}
+
+/* ═══ 标签 / 面包屑 / 代码 ═══ */
+function renderTabs(){
+  var box = $('tabs'); box.innerHTML = '';
+  state.open.forEach(function(p){
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'tab'; b.setAttribute('role','tab');
+    b.setAttribute('aria-selected', p === state.file ? 'true' : 'false');
+    b.dataset.od = 'tab-' + p.replace(/[^\w]/g,'-');
+    b.innerHTML = '<span class="fname">' + esc(p.split('/').pop()) + '</span>' +
+      '<span class="close" title="关闭 ' + esc(p) + '" aria-hidden="true">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg></span>';
+    b.addEventListener('click', function(e){
+      if (e.target.closest('.close')) { closeFile(p); return; }
+      state.file = p; renderAll();
+    });
+    box.appendChild(b);
+  });
+}
+function renderCode(){
+  var f = FILES[state.file];
+  var lines = f.code.replace(/\n$/, '').split('\n');
+  var bps = state.bp[state.file] || [];
+  var box = $('code'), keep = box.scrollTop;
+  box.innerHTML = '';
+  lines.forEach(function(line, i){
+    var n = i + 1;
+    var row = document.createElement('div');
+    row.className = 'cline' + (n === state.cur ? ' cur' : '');
+    row.dataset.line = n;
+    var g = document.createElement('div');
+    g.className = 'gutter';
+    var bp = document.createElement('button');
+    bp.type = 'button'; bp.className = 'bp' + (bps.indexOf(n) < 0 ? ' off' : '');
+    bp.setAttribute('aria-label', (bps.indexOf(n) < 0 ? '在第 ' + n + ' 行设置断点' : '移除第 ' + n + ' 行断点'));
+    bp.setAttribute('aria-pressed', bps.indexOf(n) < 0 ? 'false' : 'true');
+    bp.addEventListener('click', function(e){ e.stopPropagation(); toggleBp(n); });
+    g.appendChild(bp);
+    g.appendChild(document.createTextNode(String(n)));
+    var s = document.createElement('div');
+    s.className = 'src';
+    s.innerHTML = highlight(line, f.lang) || '&nbsp;';
+    row.appendChild(g); row.appendChild(s);
+    row.addEventListener('click', function(){
+      state.cur = n;
+      $('cursorPos').textContent = 'Ln ' + n + ', Col ' + (line.length + 1);
+      renderCode();
+    });
+    box.appendChild(row);
+  });
+  var parts = state.file.split('/');
+  $('bcProj').textContent = state.project;
+  $('bcDir').textContent = parts.length > 1 ? parts[0] : '根目录';
+  $('bcFile').textContent = parts[parts.length - 1];
+  $('bcLang').textContent = (f.lang === 'cpp' ? 'C++' : f.lang === 'json' ? 'JSON' : f.lang === 'md' ? 'Markdown' : 'C') + ' · ' + f.ver;
+  $('bpCount').textContent = Object.keys(state.bp).reduce(function(a, k){ return a + state.bp[k].length; }, 0);
+  $('probCount').textContent = PROBLEMS.length;
+  box.scrollTop = keep;
+}
+
+/* ═══ 底部面板 ═══ */
+var VIEWS = [
+  { id:'problems', label:'问题', n:PROBLEMS.length, nClass:'err' },
+  { id:'output', label:'输出' },
+  { id:'debug', label:'调试控制台' },
+  { id:'tasks', label:'任务', n:1 },
+  { id:'terminal', label:'终端' }
+];
+var STREAMS = [
+  { id:'stdout', label:'stdout' }, { id:'stderr', label:'stderr', n:STDERR.length },
+  { id:'info', label:'info' }
+];
+function renderPanel(){
+  var bar = $('panelTabs');
+  bar.querySelectorAll('.panel-tab, .p-spacer, .panel-actions').forEach(function(n){ n.remove(); });
+  VIEWS.forEach(function(v){
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'panel-tab'; b.setAttribute('role','tab');
+    b.setAttribute('aria-selected', state.view === v.id ? 'true' : 'false');
+    b.dataset.od = 'view-' + v.id;
+    b.innerHTML = esc(v.label) + (v.n ? '<span class="n ' + (v.nClass || '') + '">' + v.n + '</span>' : '');
+    b.addEventListener('click', function(){ state.view = v.id; showPanel(true); renderPanel(); });
+    bar.appendChild(b);
+  });
+  var sp = document.createElement('span'); sp.className = 'p-spacer'; bar.appendChild(sp);
+  var acts = document.createElement('span'); acts.className = 'panel-actions';
+  acts.innerHTML =
+    '<button class="btn-icon" data-pa="clear" title="清空当前视图" aria-label="清空当前视图"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg></button>' +
+    '<button class="btn-icon" data-pa="close" title="隐藏面板（Ctrl+J）" aria-label="隐藏面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>';
+  bar.appendChild(acts);
+  acts.querySelectorAll('[data-pa]').forEach(function(b){
+    b.addEventListener('click', function(){
+      if (b.dataset.pa === 'close') { showPanel(false); return; }
+      $('panelBody').innerHTML = '<div class="empty">' + esc($('panelTabs').querySelector('[aria-selected="true"]').textContent.replace(/\d+$/, '').trim()) + ' 已清空</div>';
+      toast('已清空当前视图');
+    });
+  });
+
+  var body = $('panelBody'); body.innerHTML = '';
+  if (state.view === 'problems') {
+    PROBLEMS.forEach(function(p, i){
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'prob'; b.dataset.sev = p.sev;
+      b.dataset.od = 'problem-' + (i + 1);
+      b.innerHTML = '<span class="bar"></span><span class="msg">' + esc(p.msg) + '</span>' +
+        '<span class="loc">' + esc(p.file + ':' + p.line + ':' + p.col) + '</span>';
+      b.addEventListener('click', function(){
+        openFile(p.file); state.cur = p.line; renderCode();
+        var row = document.querySelector('.cline[data-line="' + p.line + '"]');
+        if (row) $('code').scrollTop = row.offsetTop - $('code').clientHeight / 2;
+      });
+      body.appendChild(b);
+    });
+  } else if (state.view === 'output') {
+    var sb = document.createElement('div'); sb.className = 'stream-bar';
+    STREAMS.forEach(function(s){
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'seg'; b.setAttribute('role','tab');
+      b.setAttribute('aria-selected', state.stream === s.id ? 'true' : 'false');
+      b.dataset.od = 'stream-' + s.id;
+      b.innerHTML = esc(s.label) + (s.n ? ' <span class="n">' + s.n + '</span>' : '');
+      b.addEventListener('click', function(){ state.stream = s.id; renderPanel(); });
+      sb.appendChild(b);
+    });
+    body.appendChild(sb);
+    var out = document.createElement('div'); out.className = 'out';
+    var lines = state.stream === 'stdout' ? STDOUT : state.stream === 'stderr' ? STDERR : INFO;
+    var cls = state.stream === 'stdout' ? 'l-out' : state.stream === 'stderr' ? 'l-err' : 'l-info';
+    out.innerHTML = lines.map(function(l, i){
+      var c = cls;
+      if (state.stream === 'stdout' && i === lines.length - 2) c = 'l-dim';
+      if (state.stream === 'stderr' && /warning:/.test(l)) c = 'l-warn';
+      if (state.stream === 'stderr' && /^\s{4,}/.test(l)) c = 'l-dim';
+      return '<div class="' + c + '">' + (esc(l) || '&nbsp;') + '</div>';
+    }).join('');
+    body.appendChild(out);
+  } else if (state.view === 'debug') {
+    body.innerHTML = '<div class="out"><div class="l-dim">DAP 会话未启动。按 F5 或「调试 › 开始调试」在断点处暂停。</div>' +
+      '<div class="l-info">已加载断点：</div>' +
+      '<div>src/main.c:10  等待命中（fgets）</div><div>src/main.c:13  等待命中（printf）</div></div>';
+  } else if (state.view === 'tasks') {
+    var vl = document.createElement('div'); vl.className = 'vlist';
+    vl.innerHTML =
+      '<button class="vrow" type="button"><span>doge: build main.c</span><span class="s l-ok">完成 · 312 ms</span></button>' +
+      '<button class="vrow" type="button" aria-current="true"><span>doge: clang -std=c17 -O0 -g -DDEBUG</span><span class="s l-info">进行中</span></button>' +
+      '<button class="vrow" type="button"><span>doge: link -lm → aarch64</span><span class="s">排队</span></button>';
+    body.appendChild(vl);
+  } else {
+    var t = document.createElement('div'); t.className = 'term';
+    t.innerHTML = '<div class="term-line"><span class="p">doge@dogeide</span>:~/DogeDemo$ doge build main.c</div>' +
+      '<div class="term-line l-ok">[1/3] clang -std=c17 -O0 -g -DDEBUG main.c math.c</div>' +
+      '<div class="term-line l-ok">[2/3] link -lm -o main aarch64</div>' +
+      '<div class="term-line l-dim">[3/3] done in 312 ms</div>' +
+      '<div class="term-line"><span class="p">doge@dogeide</span>:~/DogeDemo$ <span style="opacity:.6">▊</span></div>';
+    body.appendChild(t);
+  }
+}
+function showPanel(on){ state.panel = on; $('panel').dataset.open = on ? 'true' : 'false'; persist(); }
+function showExplorer(on){
+  state.explorer = on; $('explorer').hidden = !on; $('vsplit').hidden = !on; persist();
+}
+
+/* ═══ 活动栏 ═══ */
+function renderRail(){
+  var rail = $('rail'); rail.innerHTML = '';
+  RAIL.forEach(function(r){
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'rail-btn' + (r.id === 'files' && state.explorer ? ' active' : '');
+    b.setAttribute('aria-pressed', r.id === 'files' && state.explorer ? 'true' : 'false');
+    b.title = r.l + (r.k ? '（' + r.k + '）' : ''); b.setAttribute('aria-label', b.title);
+    b.dataset.od = 'rail-' + r.id;
+    b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' +
+      r.svg + '</svg>' + (r.badge ? '<span class="badge">' + r.badge + '</span>' : '');
+    b.addEventListener('click', function(){ run(r.a); });
+    rail.appendChild(b);
+  });
+}
+
+/* ═══ 命令实现 ═══ */
+function toggleBp(n){
+  var list = state.bp[state.file] = state.bp[state.file] || [];
+  var i = list.indexOf(n);
+  if (i < 0) { list.push(n); list.sort(function(a,b){ return a-b; }); toast('已在第 ' + n + ' 行设置断点'); }
+  else { list.splice(i, 1); toast('已移除第 ' + n + ' 行断点'); }
+  renderCode();
+}
+function nextBp(){
+  var list = state.bp[state.file] || [];
+  if (!list.length) { toast('当前文件没有断点', 'error'); return; }
+  var n = list.filter(function(x){ return x > state.cur; })[0] || list[0];
+  state.cur = n; renderCode();
+  var row = document.querySelector('.cline[data-line="' + n + '"]');
+  if (row) $('code').scrollTop = row.offsetTop - $('code').clientHeight / 3;
+  toast('已移动到断点：第 ' + n + ' 行');
+}
+function runCode(){
+  if (state.running) return;
+  state.running = true; setRunState('run', '编译中…');
+  toast('正在编译 src/main.c');
+  setTimeout(function(){
+    state.running = false; setRunState('ready', '就绪 · 编译结束');
+    $('probCount').textContent = PROBLEMS.length;
+    state.view = 'output'; state.stream = 'stdout'; showPanel(true); renderPanel();
+  }, 900);
+}
+function setRunState(s, text){
+  var c = $('runState'); c.dataset.s = s; $('runStateText').textContent = text;
+  $('runBtn').disabled = (s === 'run');
+}
+function newFile(){
+  showExplorer(true);
+  var name = window.prompt('新建文件（不要输入目录路径）', state.project === 'DogeDemo' ? 'main.c' : 'untitled.c');
+  if (name === null) return;
+  name = name.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(name) || name.indexOf('..') >= 0) {
+    toast('请输入合法文件名，例如 main.cpp 或 config.h', 'error'); return;
+  }
+  var path = 'src/' + name;
+  if (FILES[path]) { toast('文件已存在：' + name, 'error'); return; }
+  FILES[path] = { lang:/\.(h|hh|hpp|hxx)$/i.test(name) ? 'c' : 'c', ver:'C17', code:'' };
+  ORDER.push(path);
+  TREE[0].children.push(path);
+  if (state.open.indexOf(path) < 0) state.open.push(path);
+  state.file = path; renderAll();
+  toast('已新建 ' + path, 'success');
+}
+function renameFile(){
+  var old = state.file;
+  var name = window.prompt('重命名文件', old.split('/').pop());
+  if (name === null || !name.trim()) return;
+  name = name.trim();
+  if (name === old.split('/').pop()) return;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.(c|cc|cpp|cxx|h|hh|hpp|hxx|json|md)$/i.test(name)) {
+    toast('文件名不合法', 'error'); return;
+  }
+  var path = 'src/' + name;
+  if (FILES[path]) { toast('文件已存在：' + name, 'error'); return; }
+  FILES[path] = FILES[old]; delete FILES[old];
+  ORDER[ORDER.indexOf(old)] = path;
+  TREE[0].children[TREE[0].children.indexOf(old)] = path;
+  state.open[state.open.indexOf(old)] = path;
+  if (state.bp[old]) { state.bp[path] = state.bp[old]; delete state.bp[old]; }
+  state.file = path; renderAll();
+  toast('已重命名为 ' + path, 'success');
+}
+function closeFile(path){
+  var i = state.open.indexOf(path);
+  if (i < 0) return;
+  state.open.splice(i, 1);
+  delete state.dirty[path];
+  if (state.file === path) state.file = state.open[Math.min(i, state.open.length - 1)] || 'README.md';
+  if (!state.open.length) state.open = ['README.md'];
+  renderAll();
+}
+function deleteFile(){
+  var path = state.file;
+  if (!FILES[path] || path === 'README.md') { toast('该文件不可删除', 'error'); return; }
+  if (!window.confirm('确定删除文件 “' + path.split('/').pop() + '” 吗？此操作不可撤销。')) return;
+  delete FILES[path];
+  var oi = ORDER.indexOf(path); if (oi >= 0) ORDER.splice(oi, 1);
+  TREE.forEach(function(n){ if (n.children) { var k = n.children.indexOf(path); if (k >= 0) n.children.splice(k, 1); } });
+  delete state.bp[path];
+  state.open = state.open.filter(function(p){ return p !== path; });
+  if (!state.open.length) state.open = ['README.md'];
+  state.file = state.open[0];
+  renderAll(); toast('已删除 ' + path.split('/').pop(), 'success');
+}
+function copyPath(){
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(state.file).then(
+      function(){ toast('已复制：' + state.file); },
+      function(){ toast('复制失败，请手动复制：' + state.file, 'error'); });
+  } else { toast('当前环境不支持剪贴板：' + state.file, 'error'); }
+}
+function setFont(d){
+  state.font = Math.max(11, Math.min(24, state.font + d));
+  document.documentElement.style.setProperty('--code-size', state.font + 'px');
+  $('cursorPos').title = '编辑器字号 ' + state.font + 'px';
+  persist();
+}
+function setRunStateReady(){ setRunState('idle', '就绪 · 工具链未导入'); }
+
+var ACTIONS = {
+  'file.newFile': newFile,
+  'file.newProject': function(){ toast('将弹出「新建项目」对话框（名称 / 语言 / 模板）'); },
+  'file.open': function(){ toast('将打开系统目录选择器（openProject）'); },
+  'file.save': function(){ state.dirty = {}; renderTree(); toast('项目已保存到目录 · .doge-project.json', 'success'); },
+  'file.renameProject': function(){
+    var n = window.prompt('项目名称', state.project);
+    if (!n || !n.trim()) return;
+    state.project = n.trim(); renderTree(); $('bcProj').textContent = state.project;
+    toast('项目名称已更新为 ' + state.project, 'success');
+  },
+  'file.renameFile': renameFile,
+  'file.delete': deleteFile,
+  'file.close': function(){ closeFile(state.file); },
+  'file.quit': function(){ toast('WebView 中无法退出进程，已忽略'); },
+  'edit.undo': function(){ toast('已撤销上一步编辑'); },
+  'edit.redo': function(){ toast('已重做'); },
+  'edit.cut': function(){ toast('已剪切选区'); },
+  'edit.copy': function(){ toast('已复制选区'); },
+  'edit.paste': function(){ toast('已粘贴'); },
+  'edit.complete': function(){ state.dirty[state.file] = true; toast('补全：add_numbers · clamp_value · printf', 'success'); renderTabs(); renderTree(); },
+  'edit.format': function(){ toast('已按 4 空格缩进格式化'); },
+  'edit.find': function(){ toast('查找需先加载 CodeMirror search addon（见迁移说明 §5）'); },
+  'edit.replace': function(){ toast('替换需先加载 CodeMirror search addon（见迁移说明 §5）'); },
+  'run.run': runCode,
+  'run.task': function(){ state.view = 'tasks'; showPanel(true); renderPanel(); toast('已作为后台任务启动编译'); },
+  'run.cancel': function(){ setRunStateReady(); toast('已取消执行'); },
+  'run.clear': function(){ STDOUT.length = 0; STDERR.length = 0; INFO.length = 0; state.view = 'output'; showPanel(true); renderPanel(); toast('控制台已清空'); },
+  'view.explorer': function(){ showExplorer(!state.explorer); renderRail(); },
+  'view.panel': function(){ showPanel(!state.panel); },
+  'view.stdin': function(){
+    state.stdin = !state.stdin; $('stdin').dataset.open = state.stdin ? 'true' : 'false';
+    $('stdinHead').setAttribute('aria-expanded', state.stdin ? 'true' : 'false'); persist();
+  },
+  'view.fontUp': function(){ setFont(1); },
+  'view.fontDown': function(){ setFont(-1); },
+  'view.reset': function(){
+    document.documentElement.style.removeProperty('--explorer-w');
+    document.documentElement.style.removeProperty('--panel-h');
+    try{ localStorage.removeItem('doge-ide-explorer-w'); localStorage.removeItem('doge-ide-panel-h'); }catch(e){}
+    showExplorer(true); showPanel(true); setFont(14 - state.font); state.view = 'output'; renderAll();
+    toast('布局已重置');
+  },
+  'debug.start': function(){ state.view = 'debug'; showPanel(true); renderPanel(); toast('调试会话已启动，已停在第 10 行断点', 'success'); },
+  'debug.toggleBp': function(){ toggleBp(state.cur); },
+  'debug.next': nextBp,
+  'debug.clearBp': function(){ state.bp = {}; renderCode(); toast('已清除所有断点'); },
+  'debug.console': function(){ state.view = 'debug'; showPanel(true); renderPanel(); },
+  'help.shortcuts': function(){ openDialog('shortcuts'); },
+  'help.toolchain': function(){
+    setRunState('ready', '就绪 · 运行库已导入');
+    toast('导入本地运行库：读取 .zip 中 aarch64 clang 17.0.2', 'success');
+  },
+  'help.deps': function(){ toast('导入离线依赖包：解析 name@version 坐标'); },
+  'help.settings': function(){ openDialog('settings'); },
+  'help.about': function(){ openDialog('about'); },
+  'go.search': function(){ toast('在项目中搜索 · 尚未接入索引'); },
+  'go.scm': function(){ toast('源代码管理 · 尚无远程仓库配置'); },
+  'go.debug': function(){ state.view = 'debug'; showPanel(true); renderPanel(); },
+  'go.ext': function(){ toast('扩展 · 本地 C/C++ 环境不需要扩展'); },
+  'noop': function(){}
+};
+function run(action){
+  var fn = ACTIONS[action];
+  if (fn) fn();
+  else toast('命令尚未实现：' + action, 'error');
+}
+
+/* ═══ 事件绑定 ═══ */
+function renderAll(){ renderRail(); renderTree(); renderTabs(); renderCode(); renderPanel(); }
+document.addEventListener('click', function(e){
+  var t = e.target.closest('[data-cmd]');
+  if (t) { e.preventDefault(); run(t.dataset.cmd); return; }
+  if (layer.dataset.kind === 'menu' && !e.target.closest('.menu') && !e.target.closest('.menu-btn')) closeMenus();
+});
+$('runBtn').addEventListener('click', runCode);
+$('debugBtn').addEventListener('click', function(){ run('debug.start'); });
+$('stdinHead').addEventListener('click', function(){ run('view.stdin'); });
+$('explorerTitle').addEventListener('dblclick', function(){ run('file.renameProject'); });
+
+/* 分隔线拖拽 */
+function drag(el, axis, cssVar, min, max, storageKey){
+  el.addEventListener('pointerdown', function(e){
+    e.preventDefault(); el.setPointerCapture(e.pointerId);
+    var start = axis === 'x' ? e.clientX : e.clientY;
+    var base = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(cssVar));
+    function move(ev){
+      var v = base + ((axis === 'x' ? ev.clientX : ev.clientY) - start);
+      v = Math.max(min, Math.min(max, v));
+      document.documentElement.style.setProperty(cssVar, v + 'px');
+    }
+    function up(){
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      var v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(cssVar));
+      try{ localStorage.setItem(storageKey, Math.round(v)); }catch(err){}
+    }
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  });
+  el.addEventListener('keydown', function(e){
+    var d = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -16 : e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 16 : 0;
+    if (!d) return;
+    e.preventDefault();
+    var v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(cssVar)) + d;
+    v = Math.max(min, Math.min(max, v));
+    document.documentElement.style.setProperty(cssVar, v + 'px');
+    try{ localStorage.setItem(storageKey, Math.round(v)); }catch(err){}
+  });
+}
+drag($('vsplit'), 'x', '--explorer-w', 180, Math.min(520, innerWidth - 320), 'doge-ide-explorer-w');
+drag($('hsplit'), 'y', '--panel-h', 96, Math.max(120, innerHeight - 260), 'doge-ide-panel-h');
+
+/* 快捷键 */
+document.addEventListener('keydown', function(e){
+  var mod = e.ctrlKey || e.metaKey;
+  var k = e.key.toLowerCase();
+  if (layer.firstChild) {
+    if (e.key === 'Escape' && document.activeElement !== $('palInput')) { e.preventDefault(); closeOverlays(); }
+    return;
+  }
+  if (mod && e.shiftKey && k === 'p') { e.preventDefault(); openPalette(); return; }
+  if (mod && e.shiftKey && k === 'n') { e.preventDefault(); run('file.newProject'); return; }
+  if (mod && e.shiftKey && k === 'b') { e.preventDefault(); run('run.task'); return; }
+  if (mod && e.shiftKey && k === 'f') { e.preventDefault(); run('go.search'); return; }
+  if (mod && e.shiftKey && k === 'd') { e.preventDefault(); run('go.debug'); return; }
+  if (mod && !e.shiftKey && k === 'enter') { e.preventDefault(); runCode(); return; }
+  if (mod && k === 'n') { e.preventDefault(); run('file.newFile'); return; }
+  if (mod && k === 's' && !e.shiftKey) { e.preventDefault(); run('file.save'); return; }
+  if (mod && k === 'b' && !e.shiftKey) { e.preventDefault(); run('view.explorer'); return; }
+  if (mod && k === 'j') { e.preventDefault(); run('view.panel'); return; }
+  if (mod && k === 'i') { e.preventDefault(); run('view.stdin'); return; }
+  if (mod && k === 'l') { e.preventDefault(); run('run.clear'); return; }
+  if (mod && k === ' ') { e.preventDefault(); run('edit.complete'); return; }
+  if (mod && k === 'w') { e.preventDefault(); run('file.close'); return; }
+  if (mod && k === 'o') { e.preventDefault(); run('file.open'); return; }
+  if (mod && k === ',') { e.preventDefault(); run('help.settings'); return; }
+  if (mod && (k === '=' || k === '+')) { e.preventDefault(); setFont(1); return; }
+  if (mod && k === '-') { e.preventDefault(); setFont(-1); return; }
+  if (!mod && e.key === 'F5') { e.preventDefault(); run('debug.start'); return; }
+  if (!mod && e.key === 'F9') { e.preventDefault(); run('debug.toggleBp'); return; }
+  if (!mod && e.key === 'F10') { e.preventDefault(); nextBp(); return; }
+  if (!mod && e.key === 'F2') { e.preventDefault(); renameFile(); return; }
+  if (!mod && e.key === 'Delete') {
+    if (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+    e.preventDefault(); deleteFile(); return;
+  }
+  if (e.key === 'Escape') { run('run.cancel'); return; }
+});
+
+/* 初始化 */
+document.documentElement.style.setProperty('--code-size', state.font + 'px');
+renderMenus();
+$('stdin').dataset.open = state.stdin ? 'true' : 'false';
+$('stdinHead').setAttribute('aria-expanded', state.stdin ? 'true' : 'false');
+showExplorer(state.explorer);
+showPanel(state.panel);
+setRunStateReady();
+renderAll();
+})();
+</script>
+</body>
+</html>

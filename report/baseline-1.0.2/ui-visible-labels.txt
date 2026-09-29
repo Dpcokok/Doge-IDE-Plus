@@ -1,0 +1,32 @@
+{
+}
+#include <iostream>
+📥 Standard Input (stdin)
+保存项目到目录
+打开项目目录
+代码补全
+导入运行库
+点击 Run 或按 Ctrl+Enter 运行代码...
+删除文件
+设置
+收起项目面板
+显示或隐藏项目面板
+新建文件
+新建项目
+C++ · C++20
+C++ · C++20（项目语言固定）
+D
+Doge IDE - 轻量在线编程工具
+Doge IDE+
+Doge IDE+ · 本地 C/C++ 编程环境
+info
+int main()
+main.cpp
+MyProject
+Output
+return 0;
+Run
+stderr
+stdout
+Tasks
+using namespace std;

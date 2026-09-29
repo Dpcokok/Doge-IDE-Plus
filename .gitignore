@@ -10,3 +10,6 @@ exe/*.exe
 
 # Release payloads are distributed outside normal source history.
 release/*/*.zip
+
+# graphify generated knowledge graph (~1MB of derived output)
+graphify-out/

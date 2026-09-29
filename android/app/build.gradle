@@ -7,7 +7,7 @@ plugins {
 def repoRoot = file('../..')
 def webAppDir = layout.buildDirectory.dir('generated/webapp')
 
-// 可选正式签名：把 keystore.properties 放在 android/ 下（格式见 android/README.md）
+// 正式签名：release 构建必须配置 android/keystore.properties。
 def keystoreFile = rootProject.file('keystore.properties')
 def keystoreProps = new Properties()
 def hasKeystore = keystoreFile.exists()
@@ -25,8 +25,8 @@ android {
         // Local toolchains are executed from the app files directory. Android's
         // execute restriction for target 29+ blocks that workflow.
         targetSdk 28
-        versionCode 2
-        versionName '1.0.1'
+        versionCode 4
+        versionName '1.1.0'
     }
 
     signingConfigs {
@@ -44,7 +44,7 @@ android {
         release {
             // 无第三方依赖，混淆收益极小，换取构建可预测性
             minifyEnabled false
-            signingConfig hasKeystore ? signingConfigs.getByName('release') : signingConfigs.getByName('debug')
+            signingConfig hasKeystore ? signingConfigs.getByName('release') : null
         }
         debug {
             applicationIdSuffix '.debug'
@@ -75,12 +75,26 @@ android {
     }
 
     lint {
-        abortOnError false
-        checkReleaseBuilds false
+        abortOnError true
+        checkReleaseBuilds true
     }
 }
 
-android.sourceSets.main.assets.srcDir(webAppDir.get().asFile)
+tasks.configureEach { task ->
+    if (task.name == 'assembleRelease' || task.name == 'bundleRelease' || task.name == 'packageRelease') {
+        task.doFirst {
+            if (!hasKeystore) throw new GradleException('Release APK requires android/keystore.properties; use assembleDebug for test builds.')
+        }
+    }
+}
+
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach {
+    doFirst {
+        if (!hasKeystore) throw new GradleException('Release APK requires android/keystore.properties; use assembleDebug for test builds.')
+    }
+}
+
+extensions.getByName('android').sourceSets.main.assets.srcDir(webAppDir.get().asFile)
 
 tasks.register('syncWebapp', Sync) {
     description = 'Copy doge-ide.html + web/ from the repo root into the APK assets'
