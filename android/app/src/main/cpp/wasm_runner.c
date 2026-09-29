@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "wasm_export.h"
 
@@ -23,7 +24,25 @@ typedef struct {
     int fd;
     const uint8_t *data;
     size_t size;
+    atomic_bool *cancelled;
 } InputWriter;
+
+static void close_writer_fd(void *arg) {
+    InputWriter *writer = (InputWriter *)arg;
+    if (writer->fd >= 0) {
+        close(writer->fd);
+        writer->fd = -1;
+    }
+}
+
+static void close_pipe_pair(int fds[2]) {
+    for (int i = 0; i < 2; i++) {
+        if (fds[i] >= 0) {
+            close(fds[i]);
+            fds[i] = -1;
+        }
+    }
+}
 
 typedef struct {
     wasm_module_inst_t instance;
@@ -90,14 +109,20 @@ static void *read_pipe(void *arg) {
 
 static void *write_pipe(void *arg) {
     InputWriter *writer = (InputWriter *)arg;
+    pthread_cleanup_push(close_writer_fd, writer);
     size_t offset = 0;
     while (offset < writer->size) {
+        if (atomic_load_explicit(writer->cancelled, memory_order_acquire)) break;
         ssize_t n = write(writer->fd, writer->data + offset, writer->size - offset);
         if (n > 0) { offset += (size_t)n; continue; }
         if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            usleep(1000);
+            continue;
+        }
         break;
     }
-    close(writer->fd);
+    pthread_cleanup_pop(1);
     return NULL;
 }
 
@@ -172,7 +197,7 @@ static jstring make_result(JNIEnv *env, const char *status, const char *out, con
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
+Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
                                         jbyteArray wasm_bytes, jbyteArray stdin_bytes,
                                         jint timeout_ms) {
     (void)unused;
@@ -190,8 +215,10 @@ Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
         free(wasm_buf); return result;
     }
 
-    int in_pipe[2], out_pipe[2], err_pipe[2];
-    if (pipe(in_pipe) || pipe(out_pipe) || pipe(err_pipe)) {
+    int in_pipe[2] = {-1, -1}, out_pipe[2] = {-1, -1}, err_pipe[2] = {-1, -1};
+    if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0 || pipe(err_pipe) != 0) {
+        /* 短路求值下前面已创建成功的管道也要关闭 */
+        close_pipe_pair(in_pipe); close_pipe_pair(out_pipe); close_pipe_pair(err_pipe);
         wasm_runtime_unload(module); free(wasm_buf);
         return (*env)->NewStringUTF(env, "{\"status\":\"runtime_error\",\"message\":\"pipe failed\"}");
     }
@@ -210,6 +237,8 @@ Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
     pthread_mutex_lock(&active_lock);
     if (active_instance != NULL) {
         pthread_mutex_unlock(&active_lock);
+        /* 此前创建的 6 个管道 fd 在 busy 路径下也必须关闭 */
+        close_pipe_pair(in_pipe); close_pipe_pair(out_pipe); close_pipe_pair(err_pipe);
         wasm_runtime_deinstantiate(instance); wasm_runtime_unload(module); free(wasm_buf);
         return make_result(env, "runtime_error", "", "", 0, "runner busy", false, false);
     }
@@ -231,12 +260,20 @@ Java_com_doge_ide_NativeWasmRunner_run(JNIEnv *env, jclass unused,
         input = (uint8_t *)malloc((size_t)stdin_size);
         if (input) (*env)->GetByteArrayRegion(env, stdin_bytes, 0, stdin_size, (jbyte *)input);
     }
-    InputWriter writer = {in_pipe[1], input, input ? (size_t)stdin_size : 0};
+    atomic_bool input_cancelled = false;
+    InputWriter writer = {in_pipe[1], input, input ? (size_t)stdin_size : 0, &input_cancelled};
+    int input_flags = fcntl(in_pipe[1], F_GETFL, 0);
+    if (input_flags >= 0) fcntl(in_pipe[1], F_SETFL, input_flags | O_NONBLOCK);
     if (pthread_create(&input_thread, NULL, write_pipe, &writer) == 0) input_thread_started = true;
     else close(in_pipe[1]);
     bool ok = wasm_application_execute_main(instance, 1, (char **)argv);
     close(in_pipe[0]);
-    if (input_thread_started) pthread_join(input_thread, NULL);
+    if (input_thread_started) {
+        // Android's pthread implementation does not expose pthread_cancel.
+        // The writer is non-blocking and observes this flag between attempts.
+        atomic_store_explicit(&input_cancelled, true, memory_order_release);
+        pthread_join(input_thread, NULL);
+    }
     free(input);
     pthread_mutex_lock(&active_lock);
     active_done = true;

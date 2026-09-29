@@ -12,17 +12,25 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Compiles a small local C/C++ project to a WASI module. */
 final class LocalCompiler {
+    interface ProgressListener { void onUpdate(String phase, String stdout, String stderr); }
     private static final long MAX_OUTPUT = 2L * 1024L * 1024L;
+    private static final long MAX_CACHE_BYTES = 128L * 1024L * 1024L;
     private final File filesDir;
+    private final DependencyManager dependencies;
     private static final Set<Process> ACTIVE_PROCESSES = ConcurrentHashMap.newKeySet();
+    private static final java.util.concurrent.atomic.AtomicBoolean RUNS_CLEANED = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     LocalCompiler(Context context) {
         filesDir = context.getApplicationContext().getFilesDir();
+        dependencies = DependencyManager.get(context);
+        // 进程被系统杀掉时 finally 不会执行，runs/ 下会留下孤儿编译目录；每个进程启动时清理一次
+        if (RUNS_CLEANED.compareAndSet(false, true)) deleteTree(new File(filesDir, "runs"));
     }
 
     static void cancelActive() {
@@ -30,7 +38,9 @@ final class LocalCompiler {
         NativeWasmRunner.cancel();
     }
 
-    String execute(String requestJson) {
+    String execute(String requestJson) { return execute(requestJson, (phase, stdout, stderr) -> {}); }
+
+    String execute(String requestJson, ProgressListener listener) {
         try {
             JSONObject request = new JSONObject(requestJson);
             String language = request.optString("language", "");
@@ -44,6 +54,7 @@ final class LocalCompiler {
             String stdin = request.optString("stdin", "");
             JSONObject build = request.optJSONObject("build");
             int timeout = Math.max(1000, Math.min(30000, request.optInt("timeout_ms", 30000)));
+            long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
             if (!"c".equals(language) && !"cpp".equals(language)) {
                 return error("invalid_request", "仅支持 C 和 C++");
             }
@@ -62,17 +73,20 @@ final class LocalCompiler {
                 File candidate = new File(toolchain, "bin/" + executable);
                 if (candidate.isFile()) candidate.setExecutable(true, false);
             }
-            writeCompileCommands(request, files, build, toolchain, sysroot);
+            String fingerprint = cacheFingerprint(request);
             File work = new File(new File(filesDir, "runs"), Long.toHexString(System.nanoTime()) + "-" + Thread.currentThread().getId());
             if (!work.isDirectory() && !work.mkdirs()) return error("runtime_error", "无法创建编译目录");
             File wasm = new File(work, "main.wasm");
             Files.deleteIfExists(wasm.toPath());
+            writeCompileCommands(request, files, build, toolchain, sysroot);
 
             String target = "wasm32-wasip1";
             StringBuilder compileError = new StringBuilder();
+            listener.onUpdate("compiling", "", "");
             java.util.ArrayList<File> objects = new java.util.ArrayList<>();
             String effectiveLanguage = language;
             boolean entryFound = false;
+            try {
             for (int i = 0; i < files.length(); i++) {
                 JSONObject file = files.optJSONObject(i);
                 if (file == null) continue;
@@ -90,26 +104,40 @@ final class LocalCompiler {
                 if (lower.endsWith(".cc") || lower.endsWith(".cpp") || lower.endsWith(".cxx")) effectiveLanguage = "cpp";
                 File source = projectFile;
                 File object = new File(work, relative + ".o");
+                object.getParentFile().mkdirs();
+                File cachedObject = new File(new File(filesDir, "build-cache/" + fingerprint), relative + ".o");
                 File objectParent = object.getParentFile();
                 if (objectParent != null) objectParent.mkdirs();
                 Files.deleteIfExists(object.toPath());
+                if (cachedObject.isFile()) {
+                    Files.copy(cachedObject.toPath(), object.toPath());
+                    objects.add(object);
+                    continue;
+                }
                 File compilerFile = new File(toolchain, "bin/" + (lower.endsWith(".c") ? "clang" : "clang++"));
+                listener.onUpdate("compiling", "", "编译 " + relative + "\n");
                 ProcessBuilder compiler = new ProcessBuilder(
                         compilerFile.getAbsolutePath(), "--target=" + target, "--sysroot=" + sysroot.getAbsolutePath(),
                         "-O2", "-std=" + (lower.endsWith(".c") ? "c17" : "c++20"),
                         "-fno-exceptions", "-fno-rtti", "-c", source.getAbsolutePath(), "-o", object.getAbsolutePath());
-                applyBuildOptions(compiler, build, work, sysroot);
+                applyBuildOptions(compiler, build, work, sysroot, dependencies);
                 configureEnvironment(compiler, toolchain, work);
-                ProcessResult compiled = runProcess(compiler, timeout);
+            ProcessResult compiled = runProcess(compiler, remainingMillis(deadlineNanos), (out, err) -> {
+                    if (!out.isEmpty() || !err.isEmpty()) listener.onUpdate("compiling", out, err);
+                });
                 if (!compiled.finished) return result("timeout", "", compiled.stderr, -1);
                 compileError.append(compiled.stderr);
                 if (compiled.exitCode != 0 || !object.isFile()) return result("compile_error", "", compileError.toString(), compiled.exitCode);
                 objects.add(object);
+                File cacheParent = cachedObject.getParentFile();
+                if (cacheParent != null) cacheParent.mkdirs();
+                Files.copy(object.toPath(), cachedObject.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
             if (objects.isEmpty()) return error("invalid_request", "项目中没有 C/C++ 源文件");
             if (!entryFound) return error("invalid_request", "入口文件不存在: " + entry);
 
             File linker = new File(toolchain, "bin/wasm-ld");
+            listener.onUpdate("linking", "", compileError.toString());
             File wasiLib = new File(sysroot, "lib/wasm32-wasip1");
             File crt = new File(wasiLib, "crt1-command.o");
             File builtins = new File(toolchain, "lib/clang/21/lib/wasm32-wasip1/libclang_rt.builtins.a");
@@ -122,17 +150,27 @@ final class LocalCompiler {
             } else {
                 linkArgs.add("-lc"); linkArgs.add(builtins.getAbsolutePath()); linkArgs.add("-o"); linkArgs.add(wasm.getAbsolutePath());
             }
-            applyLinkOptions(linkArgs, build, work, sysroot);
+            applyLinkOptions(linkArgs, build, work, sysroot, dependencies);
             ProcessBuilder link = new ProcessBuilder(linkArgs);
             configureEnvironment(link, toolchain, work);
-            ProcessResult linked = runProcess(link, timeout);
+            listener.onUpdate("linking", "", compileError.toString());
+            ProcessResult linked = runProcess(link, remainingMillis(deadlineNanos), (out, err) -> {
+                if (!err.isEmpty()) listener.onUpdate("linking", out, compileError.toString() + err);
+            });
             if (!linked.finished) return result("timeout", "", "链接超时", -1);
             compileError.append(linked.stderr);
             if (linked.exitCode != 0 || !wasm.isFile()) return result("compile_error", "", compileError.toString(), linked.exitCode);
-            String run = NativeWasmRunner.run(Files.readAllBytes(wasm.toPath()), stdin.getBytes(StandardCharsets.UTF_8), timeout);
+            listener.onUpdate("running", "", compileError.toString());
+            String run = NativeWasmRunner.run(Files.readAllBytes(wasm.toPath()), stdin.getBytes(StandardCharsets.UTF_8), remainingMillis(deadlineNanos));
+            trimBuildCache();
             JSONObject response = new JSONObject(run);
             response.put("compile_stderr", compileError.toString());
             return response.toString();
+            } finally {
+                deleteTree(work);
+            }
+        } catch (TimeoutException e) {
+            return result("timeout", "", e.getMessage(), -1);
         } catch (Exception e) {
             return error("runtime_error", e.toString());
         }
@@ -163,7 +201,7 @@ final class LocalCompiler {
         } catch (Exception ignored) { }
     }
 
-    private static void applyBuildOptions(ProcessBuilder process, JSONObject build, File work, File sysroot) {
+    private static void applyBuildOptions(ProcessBuilder process, JSONObject build, File work, File sysroot, DependencyManager dependencyManager) throws Exception {
         if (build == null) return;
         String opt = build.optString("optimization", "2");
         java.util.List<String> command = process.command();
@@ -178,12 +216,21 @@ final class LocalCompiler {
         }
         JSONArray dependencies = build.optJSONArray("dependencies");
         if (dependencies != null) for (int i = 0; i < dependencies.length(); i++) {
-            JSONObject dep = dependencies.optJSONObject(i); if (dep == null) continue;
-            String path = safeRelative(dep.optString("path", "")); if (path != null) command.add("-I" + new File(work, path + "/include").getAbsolutePath());
+            JSONObject dep = dependencies.optJSONObject(i);
+            String name = dep == null ? "" : dep.optString("name", "");
+            String version = dep == null ? "" : dep.optString("version", "");
+            if (name.isEmpty() || version.isEmpty()) {
+                String[] coordinate = dependencies.optString(i, "").split("@", 2);
+                if (coordinate.length == 2) { name = coordinate[0]; version = coordinate[1]; }
+            }
+            File packageRoot = name.isEmpty() || version.isEmpty() ? null : dependencyManager.resolvePackage(name, version);
+            if (packageRoot == null) throw new IOException("依赖未安装或 registry 无效: " + name + "@" + version);
+            File include = new File(packageRoot, "include");
+            if (include.isDirectory()) command.add("-I" + include.getAbsolutePath());
         }
     }
 
-    private static void applyLinkOptions(java.util.ArrayList<String> args, JSONObject build, File work, File sysroot) {
+    private static void applyLinkOptions(java.util.ArrayList<String> args, JSONObject build, File work, File sysroot, DependencyManager dependencyManager) throws Exception {
         if (build == null) return;
         JSONArray libraryPaths = build.optJSONArray("library_paths");
         if (libraryPaths != null) for (int i = 0; i < libraryPaths.length(); i++) {
@@ -193,10 +240,53 @@ final class LocalCompiler {
         if (libraries != null) for (int i = 0; i < libraries.length(); i++) {
             String name = libraries.optString(i, ""); if (name.matches("[A-Za-z0-9_+.-]+")) args.add("-l" + name);
         }
+        JSONArray deps = build.optJSONArray("dependencies");
+        if (deps != null) for (int i = 0; i < deps.length(); i++) {
+            JSONObject dep = deps.optJSONObject(i);
+            String coordinate = deps.optString(i, "");
+            String name = dep == null ? "" : dep.optString("name", "");
+            String version = dep == null ? "" : dep.optString("version", "");
+            if (name.isEmpty() || version.isEmpty()) { String[] parts = coordinate.split("@", 2); if (parts.length == 2) { name = parts[0]; version = parts[1]; } }
+            File packageRoot = name.isEmpty() || version.isEmpty() ? null : dependencyManager.resolvePackage(name, version);
+            if (packageRoot == null) throw new IOException("依赖未安装或 registry 无效: " + name + "@" + version);
+            File lib = new File(packageRoot, "lib");
+            if (lib.isDirectory()) args.add("-L" + lib.getAbsolutePath());
+        }
     }
 
     private static String safeRelative(String path) {
         return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.contains("..") ? path : null;
+    }
+
+    private static String cacheFingerprint(JSONObject request) throws Exception {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(request.toString().getBytes(StandardCharsets.UTF_8));
+        StringBuilder value = new StringBuilder();
+        for (byte b : digest) value.append(String.format(java.util.Locale.ROOT, "%02x", b & 0xff));
+        return value.toString();
+    }
+
+    private void trimBuildCache() {
+        File root = new File(filesDir, "build-cache");
+        File[] entries = root.listFiles();
+        if (entries == null) return;
+        long total = 0;
+        for (File entry : entries) total += treeSize(entry);
+        if (total <= MAX_CACHE_BYTES) return;
+        java.util.Arrays.sort(entries, java.util.Comparator.comparingLong(File::lastModified));
+        for (File entry : entries) {
+            // 必须在删除前取大小，删除后 treeSize 恒为 0，会导致整份缓存被清空
+            long size = treeSize(entry);
+            deleteTree(entry);
+            total -= size;
+            if (total <= MAX_CACHE_BYTES) break;
+        }
+    }
+
+    private static long treeSize(File file) {
+        if (file.isFile()) return file.length();
+        File[] children = file.listFiles();
+        if (children == null) return 0;
+        long size = 0; for (File child : children) size += treeSize(child); return size;
     }
 
     private void configureEnvironment(ProcessBuilder process, File toolchain, File work) {
@@ -209,18 +299,38 @@ final class LocalCompiler {
         process.environment().put("LLVM_CONFIG_FILE", new File(toolchain, "lib/llvm-config").getAbsolutePath());
     }
 
-    private static ProcessResult runProcess(ProcessBuilder builder, int timeout) throws Exception {
+    private static ProcessResult runProcess(ProcessBuilder builder, int timeout) throws Exception { return runProcess(builder, timeout, (out, err) -> {}); }
+
+    private static ProcessResult runProcess(ProcessBuilder builder, int timeout, ProcessListener listener) throws Exception {
         Process process = builder.redirectErrorStream(false).start();
         ACTIVE_PROCESSES.add(process);
         ByteArrayOutputStream stdout = new ByteArrayOutputStream();
         ByteArrayOutputStream stderr = new ByteArrayOutputStream();
-        Thread outReader = drain(process.getInputStream(), stdout);
-        Thread errReader = drain(process.getErrorStream(), stderr);
+        Thread outReader = drain(process.getInputStream(), stdout, listener, true);
+        Thread errReader = drain(process.getErrorStream(), stderr, listener, false);
         boolean finished = process.waitFor(timeout, TimeUnit.MILLISECONDS);
         if (!finished) process.destroyForcibly();
         outReader.join(1000); errReader.join(1000);
+        if (outReader.isAlive() || errReader.isAlive()) {
+            // 子进程被杀后流未关闭时，主动关流让读取线程退出，避免线程滞留累积
+            closeQuietly(process.getInputStream());
+            closeQuietly(process.getErrorStream());
+        }
         ACTIVE_PROCESSES.remove(process);
         return new ProcessResult(finished, finished ? process.exitValue() : -1, stderr.toString(StandardCharsets.UTF_8));
+    }
+
+    private static int remainingMillis(long deadlineNanos) throws TimeoutException {
+        long remaining = deadlineNanos - System.nanoTime();
+        if (remaining <= 0) throw new TimeoutException("执行超时");
+        return (int) Math.max(1, Math.min(Integer.MAX_VALUE, TimeUnit.NANOSECONDS.toMillis(remaining)));
+    }
+
+    private static void deleteTree(File file) {
+        if (file == null || !file.exists()) return;
+        File[] children = file.listFiles();
+        if (children != null) for (File child : children) deleteTree(child);
+        if (!file.delete() && file.exists()) file.deleteOnExit();
     }
 
     private static final class ProcessResult {
@@ -234,7 +344,9 @@ final class LocalCompiler {
         return child;
     }
 
-    private static Thread drain(InputStream input, ByteArrayOutputStream output) {
+    private interface ProcessListener { void onChunk(String stdout, String stderr); }
+
+    private static Thread drain(InputStream input, ByteArrayOutputStream output, ProcessListener listener, boolean stdout) {
         Thread thread = new Thread(() -> {
             byte[] buffer = new byte[8192];
             int read;
@@ -245,11 +357,20 @@ final class LocalCompiler {
                     int allowed = (int) Math.min(read, Math.max(0, MAX_OUTPUT - total));
                     if (allowed > 0) output.write(buffer, 0, allowed);
                     total += read;
+                    if (allowed > 0) {
+                        String text = new String(buffer, 0, allowed, StandardCharsets.UTF_8);
+                        listener.onChunk(stdout ? text : "", stdout ? "" : text);
+                    }
                 }
             } catch (IOException ignored) { }
         }, "doge-process-reader");
+        thread.setDaemon(true);
         thread.start();
         return thread;
+    }
+
+    private static void closeQuietly(java.io.Closeable closeable) {
+        try { if (closeable != null) closeable.close(); } catch (IOException ignored) { }
     }
 
     private static String result(String status, String stdout, String stderr, int exitCode) {

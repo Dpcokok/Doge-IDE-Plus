@@ -4,11 +4,25 @@ package com.doge.ide;
 final class NativeWasmRunner {
     private NativeWasmRunner() {}
 
-    static {
-        System.loadLibrary("iwasm");
-        System.loadLibrary("doge_wasm_jni");
+    private static volatile String loadError;
+    static synchronized boolean ensureLoaded() {
+        if (loadError != null) return false;
+        try {
+            System.loadLibrary("iwasm");
+            System.loadLibrary("doge_wasm_jni");
+            return true;
+        } catch (UnsatisfiedLinkError error) {
+            loadError = error.getMessage() == null ? error.toString() : error.getMessage();
+            return false;
+        }
     }
 
-    static synchronized native String run(byte[] wasm, byte[] stdin, int timeoutMs);
+    static String loadError() { return loadError; }
+
+    static synchronized String run(byte[] wasm, byte[] stdin, int timeoutMs) {
+        if (!ensureLoaded()) return "{\"status\":\"runtime_error\",\"message\":\"Native runtime unavailable\"}";
+        return nativeRun(wasm, stdin, timeoutMs);
+    }
+    private static synchronized native String nativeRun(byte[] wasm, byte[] stdin, int timeoutMs);
     static native void cancel();
 }

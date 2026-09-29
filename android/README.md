@@ -80,8 +80,7 @@ keyPassword=******
 
 `storeFile` 相对 `android/` 解析，所以上面这个写法指的就是 `android/doge-release.jks`。
 
-没这个文件时 release 包会退回用 debug 签名——**能装、能跑，但上架前必须换掉**。
-生成 keystore：
+没有这个文件时 `assembleRelease` 会失败，防止意外产出 debug 签名的 release APK。测试构建请使用 `assembleDebug`。生成 keystore：
 
 ```powershell
 keytool -genkeypair -v -keystore android\doge-release.jks -alias doge `

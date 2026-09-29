@@ -10,6 +10,7 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Looper;
 import android.util.Log;
 import android.view.View;
 import android.view.WindowInsets;
@@ -23,6 +24,10 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.JavascriptInterface;
 import android.widget.Toast;
+import android.widget.TextView;
+import android.app.AlertDialog;
+import android.content.ClipboardManager;
+import android.content.ClipData;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.database.Cursor;
@@ -40,6 +45,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.json.JSONObject;
@@ -58,6 +65,7 @@ public class MainActivity extends Activity {
     private static final int PICK_TOOLCHAIN = 42;
     private static final int PICK_PROJECT = 43;
     private static final int PICK_DEPENDENCY = 44;
+    private static final int PICK_CREATE_PROJECT = 45;
     private static final int MAX_PROJECT_FILE = 2 * 1024 * 1024;
     private static final long MAX_TOOLCHAIN_BYTES = 1024L * 1024 * 1024;
     private static final int MAX_TOOLCHAIN_ENTRIES = 100000;
@@ -68,12 +76,33 @@ public class MainActivity extends Activity {
     private DependencyManager dependencyManager;
     private boolean debug;
     private long lastBackAt;
+    private String pendingProjectName;
+    private String pendingProjectTemplate;
+    private final ExecutorService ioExecutor = Executors.newCachedThreadPool();
+    // 项目保存必须 FIFO 串行：保证最后一次保存的内容最终落盘
+    private final ExecutorService projectExecutor = Executors.newSingleThreadExecutor();
+    private final Object projectWriteLock = new Object();
+    private volatile boolean destroyed;
+    private Thread.UncaughtExceptionHandler previousExceptionHandler;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        previousExceptionHandler = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            showSoftwareError("Java 未捕获异常", error);
+        });
         debug = getIntent() != null && getIntent().getBooleanExtra("debug", false);
+
+        if (!isSupportedAbi()) {
+            showStartupFailure("此 APK 仅支持 arm64-v8a 设备。当前设备 ABI：" + android.os.Build.SUPPORTED_ABIS[0]);
+            return;
+        }
+        if (!NativeWasmRunner.ensureLoaded()) {
+            showStartupFailure("无法加载本地 ARM64 运行库：" + NativeWasmRunner.loadError());
+            return;
+        }
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -85,14 +114,13 @@ public class MainActivity extends Activity {
         }
 
         server = new LocalServer(this);
-        dependencyManager = new DependencyManager(this);
+        dependencyManager = DependencyManager.get(this);
         String base;
         try {
             base = server.start();
         } catch (Exception e) {
             Log.e(TAG, "local server failed", e);
-            toast(getString(R.string.server_failed, String.valueOf(e.getMessage())));
-            finish();
+            showAppError("内置服务启动失败", e);
             return;
         }
 
@@ -117,7 +145,108 @@ public class MainActivity extends Activity {
         web.loadUrl(base + "/");
     }
 
+    private boolean isSupportedAbi() {
+        for (String abi : android.os.Build.SUPPORTED_ABIS) if ("arm64-v8a".equals(abi)) return true;
+        return false;
+    }
+
+    private void showStartupFailure(String message) {
+        TextView view = new TextView(this);
+        view.setText(message);
+        view.setTextColor(Color.WHITE);
+        view.setTextSize(18);
+        view.setPadding(32, 32, 32, 32);
+        view.setBackgroundColor(BG);
+        view.setGravity(android.view.Gravity.CENTER);
+        setContentView(view);
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        Log.e(TAG, message);
+        new AlertDialog.Builder(this).setTitle("Doge IDE+ 启动失败").setMessage(message + "\n\n错误已复制到剪贴板")
+                .setPositiveButton("复制", (dialog, which) -> copyDiagnostic(message)).setNegativeButton("退出", (dialog, which) -> finishAffinity()).setCancelable(false).show();
+    }
+
+    private void showSoftwareError(String source, Throwable error) {
+        StringWriterPair detail = formatError(source, error);
+        persistDiagnostic(detail.text);
+        copyDiagnostic(detail.text);
+        if (destroyed) return;
+        runOnUiThread(() -> showFatalErrorDialog(detail.text));
+    }
+
+    private void reportSoftwareErrorInternal(String source, String message, String stack) {
+        String detail = source + "\n" + (message == null ? "未知错误" : message) + "\n" + (stack == null ? "" : stack);
+        persistDiagnostic(detail);
+        copyDiagnostic(detail);
+        if (!destroyed) runOnUiThread(() -> showErrorDialog(detail));
+    }
+
+    private void showAppError(String title, Throwable error) {
+        StringWriterPair detail = formatError(title, error);
+        persistDiagnostic(detail.text);
+        copyDiagnostic(detail.text);
+        if (!destroyed) runOnUiThread(() -> {
+            if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+            new AlertDialog.Builder(this).setTitle(title)
+                    .setMessage(detail.text + "\n\n错误已保存并复制到剪贴板")
+                    .setPositiveButton("复制", (dialog, which) -> copyDiagnostic(detail.text))
+                    .setNegativeButton("关闭", null).show();
+        });
+    }
+
+    private void showErrorDialog(String detail) {
+        if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Doge IDE+ 软件错误")
+                .setMessage(detail + "\n\n错误信息已自动复制到剪贴板")
+                .setPositiveButton("再次复制", (dialog, which) -> copyDiagnostic(detail))
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showFatalErrorDialog(String detail) {
+        if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Doge IDE+ 软件崩溃")
+                .setMessage(detail + "\n\n错误已保存并复制。请先复制或关闭此窗口，再选择退出。")
+                .setCancelable(false)
+                .setPositiveButton("复制错误", (dialog, which) -> copyDiagnostic(detail))
+                .setNegativeButton("退出应用", (dialog, which) -> {
+                    if (previousExceptionHandler != null) previousExceptionHandler.uncaughtException(Thread.currentThread(), new RuntimeException(detail));
+                    else finishAffinity();
+                })
+                .show();
+    }
+
+    private void persistDiagnostic(String detail) {
+        try {
+            File log = new File(getFilesDir(), "last-software-error.txt");
+            try (FileOutputStream output = new FileOutputStream(log, false)) {
+                output.write(detail.getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) { Log.e(TAG, "could not persist software error", e); }
+    }
+
+    private void copyDiagnostic(String detail) {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("Doge IDE+ error", detail));
+    }
+
+    private StringWriterPair formatError(String source, Throwable error) {
+        java.io.StringWriter writer = new java.io.StringWriter();
+        if (error != null) error.printStackTrace(new java.io.PrintWriter(writer));
+        return new StringWriterPair(source + "\n" + (error == null ? "未知错误" : error.toString()) + "\n" + writer);
+    }
+
+    private static final class StringWriterPair {
+        final String text;
+        StringWriterPair(String text) { this.text = text; }
+    }
+
     private final class ToolchainBridge {
+        @JavascriptInterface
+        public void reportSoftwareError(String source, String message, String stack) {
+            reportSoftwareErrorInternal(source, message, stack);
+        }
         @JavascriptInterface
         public void pickToolchain() {
             runOnUiThread(() -> {
@@ -155,16 +284,38 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public boolean saveProject(String json) {
-            try {
-                Uri tree = projectTreeUri();
-                if (tree == null) return false;
-                writeProject(tree, new JSONObject(json));
-                return true;
-            } catch (Exception e) {
-                Log.e(TAG, "project save failed", e);
-                return false;
+        public void createProject(String name, String template) {
+            runOnUiThread(() -> {
+                String safeName = name == null ? "" : name.trim();
+                if (!safeName.matches("[A-Za-z0-9._-]{1,64}")) {
+                    notifyProjectError("项目名称只能包含字母、数字、点、下划线和短横线");
+                    return;
+                }
+                pendingProjectName = safeName;
+                pendingProjectTemplate = template == null ? "c-empty" : template;
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                startActivityForResult(intent, PICK_CREATE_PROJECT);
+            });
+        }
+
+        @JavascriptInterface
+        public void saveProject(String json) {
+            final Uri tree = projectTreeUri();
+            if (tree == null) {
+                postToWeb("window.projectSaveResult && window.projectSaveResult(false," + JSONObject.quote("未选择项目目录") + ")");
+                return;
             }
+            projectExecutor.execute(() -> {
+                try {
+                    writeProject(tree, new JSONObject(json));
+                    postToWeb("window.projectSaveResult && window.projectSaveResult(true,'')");
+                } catch (Exception e) {
+                    Log.e(TAG, "project save failed", e);
+                    postToWeb("window.projectSaveResult && window.projectSaveResult(false," + JSONObject.quote(messageOf(e)) + ")");
+                }
+            });
         }
     }
 
@@ -176,16 +327,19 @@ public class MainActivity extends Activity {
             Uri uri = data.getData();
             try {
                 int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                if ((flags & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0 || (flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) throw new IOException("文件选择器未授予项目读写权限");
                 getContentResolver().takePersistableUriPermission(uri, flags);
             } catch (Exception e) {
-                Log.w(TAG, "could not persist project permission", e);
+                showAppError("项目目录授权失败", e);
+                return;
             }
             new Thread(() -> {
                 try {
-                    JSONObject project = readProject(uri);
-                    getPreferences(MODE_PRIVATE).edit().putString("project_tree_uri", uri.toString()).apply();
+                    String rootId = DocumentsContract.getTreeDocumentId(uri);
+                    JSONObject project = readProject(uri, rootId);
+                    getPreferences(MODE_PRIVATE).edit().putString("project_tree_uri", uri.toString()).putString("project_root_id", rootId).apply();
                     runOnUiThread(() -> {
-                        if (web != null) web.evaluateJavascript("window.projectOpened && window.projectOpened(" + JSONObject.quote(project.toString()) + ")", null);
+                        postToWeb("window.projectOpened && window.projectOpened(" + JSONObject.quote(project.toString()) + ")");
                     });
                 } catch (Exception e) {
                     Log.e(TAG, "project open failed", e);
@@ -194,10 +348,42 @@ public class MainActivity extends Activity {
             }, "doge-project-open").start();
             return;
         }
+        if (requestCode == PICK_CREATE_PROJECT) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+            Uri parent = data.getData();
+            try {
+                int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                if ((flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) throw new IOException("文件选择器未授予写入权限");
+                getContentResolver().takePersistableUriPermission(parent, flags);
+            } catch (Exception e) { showAppError("父目录授权失败", e); return; }
+            final String name = pendingProjectName;
+            final String template = pendingProjectTemplate;
+            pendingProjectName = null; pendingProjectTemplate = null;
+            new Thread(() -> {
+                try {
+                    Uri parentDocument = DocumentsContract.buildDocumentUriUsingTree(parent, DocumentsContract.getTreeDocumentId(parent));
+                    Uri projectTree = DocumentsContract.createDocument(getContentResolver(), parentDocument,
+                            DocumentsContract.Document.MIME_TYPE_DIR, name);
+                    if (projectTree == null) throw new IOException("无法创建项目目录");
+                    String projectRootId = DocumentsContract.getDocumentId(projectTree);
+                    boolean cpp = template.startsWith("cpp");
+                    String language = cpp ? "cpp" : "c";
+                    JSONObject project = new JSONObject().put("name", name).put("language", language).put("files", new JSONArray());
+                    if (template.endsWith("-sample")) {
+                        String code = cpp ? "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, Doge IDE!\\n\";\n    return 0;\n}\n" : "#include <stdio.h>\n\nint main(void) {\n    printf(\"Hello, Doge IDE!\\n\");\n    return 0;\n}\n";
+                        project.getJSONArray("files").put(new JSONObject().put("path", "main." + (cpp ? "cpp" : "c")).put("code", code));
+                    }
+                    writeProject(parent, project, projectRootId);
+                    getPreferences(MODE_PRIVATE).edit().putString("project_tree_uri", parent.toString()).putString("project_root_id", projectRootId).apply();
+                    postToWeb("window.projectOpened && window.projectOpened(" + JSONObject.quote(project.toString()) + ")");
+                } catch (Exception e) { showAppError("创建项目失败", e); }
+            }, "doge-project-create").start();
+            return;
+        }
         if (requestCode == PICK_DEPENDENCY) {
             if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
             Uri uri = data.getData(); String name = getPreferences(MODE_PRIVATE).getString("dependency_name", "dependency"); String version = getPreferences(MODE_PRIVATE).getString("dependency_version", "1.0.0");
-            new Thread(() -> { try { dependencyManager.install(uri, name, version); runOnUiThread(() -> web.evaluateJavascript("window.dependencyImported && window.dependencyImported(true,'')", null)); } catch (Exception e) { runOnUiThread(() -> web.evaluateJavascript("window.dependencyImported && window.dependencyImported(false," + JSONObject.quote(e.getMessage()) + ")", null)); } }, "doge-dependency-import").start();
+            ioExecutor.execute(() -> { try { dependencyManager.install(uri, name, version); postToWeb("window.dependencyImported && window.dependencyImported(true,''," + JSONObject.quote(name) + "," + JSONObject.quote(version) + ")"); } catch (Exception e) { showAppError("依赖导入失败", e); postToWeb("window.dependencyImported && window.dependencyImported(false," + JSONObject.quote(messageOf(e)) + ")"); } });
             return;
         }
         if (requestCode != PICK_TOOLCHAIN || resultCode != RESULT_OK || data == null || data.getData() == null) return;
@@ -206,13 +392,14 @@ public class MainActivity extends Activity {
             try {
                 installToolchain(uri);
                 runOnUiThread(() -> {
-                    if (web != null) web.evaluateJavascript("window.toolchainImported && window.toolchainImported(true, '')", null);
+                    postToWeb("window.toolchainImported && window.toolchainImported(true, '')");
                 });
             } catch (Exception e) {
                 Log.e(TAG, "toolchain import failed", e);
                 String message = e.getMessage() == null ? "导入失败" : e.getMessage();
+                showAppError("运行库导入失败", e);
                 runOnUiThread(() -> {
-                    if (web != null) web.evaluateJavascript("window.toolchainImported && window.toolchainImported(false, " + JSONObject.quote(message) + ")", null);
+                    postToWeb("window.toolchainImported && window.toolchainImported(false, " + JSONObject.quote(message) + ")");
                 });
             }
         }, "doge-toolchain-import").start();
@@ -223,10 +410,15 @@ public class MainActivity extends Activity {
         return value == null ? null : Uri.parse(value);
     }
 
-    private JSONObject readProject(Uri tree) throws Exception {
+    private String projectRootId(Uri authorizedTree) {
+        String rootId = getPreferences(MODE_PRIVATE).getString("project_root_id", null);
+        return rootId == null ? DocumentsContract.getTreeDocumentId(authorizedTree) : rootId;
+    }
+
+    private JSONObject readProject(Uri tree, String rootId) throws Exception {
         LinkedHashMap<String, String> scanned = new LinkedHashMap<>();
-        scanSourceFiles(tree, DocumentsContract.getTreeDocumentId(tree), "", scanned);
-        JSONObject manifest = readManifest(tree);
+        scanSourceFiles(tree, rootId, "", scanned);
+        JSONObject manifest = readManifest(tree, rootId);
         String name = manifest == null ? null : manifest.optString("name", "");
         JSONArray files = new JSONArray();
         java.util.HashSet<String> added = new java.util.HashSet<>();
@@ -251,6 +443,7 @@ public class MainActivity extends Activity {
             project.put("name", name == null || name.isEmpty() ? queryDisplayName(tree) : name);
             project.put("files", files);
             if (manifest != null) {
+                if (manifest.has("language")) project.put("language", manifest.get("language"));
                 if (manifest.has("buildProfiles")) project.put("buildProfiles", manifest.get("buildProfiles"));
                 if (manifest.has("dependencies")) project.put("dependencies", manifest.get("dependencies"));
             }
@@ -295,12 +488,27 @@ public class MainActivity extends Activity {
     }
 
     private void writeProject(Uri tree, JSONObject project) throws Exception {
+        writeProject(tree, project, projectRootId(tree));
+    }
+
+    private void writeProject(Uri tree, JSONObject project, String rootId) throws Exception {
+        // writeProject 是多步非原子操作（读清单→逐文件写→写清单→删陈旧文件），并发执行会产生重复文件或互相回滚
+        synchronized (projectWriteLock) {
+            writeProjectLocked(tree, project, rootId);
+        }
+    }
+
+    private void writeProjectLocked(Uri tree, JSONObject project, String rootId) throws Exception {
         JSONArray files = project.optJSONArray("files");
         if (files == null) throw new IOException("项目文件列表无效");
-        String rootId = DocumentsContract.getTreeDocumentId(tree);
-        JSONObject previousManifest = readManifest(tree);
+        JSONObject previousManifest = readManifest(tree, rootId);
+        String previousManifestText = previousManifest == null ? null : previousManifest.toString(2);
         JSONArray previousFiles = previousManifest == null ? new JSONArray() : previousManifest.optJSONArray("files");
         java.util.HashSet<String> currentPaths = new java.util.HashSet<>();
+        LinkedHashMap<String, byte[]> previousContents = new LinkedHashMap<>();
+        ArrayList<String> createdPaths = new ArrayList<>();
+        boolean committed = false;
+        try {
         for (int i = 0; i < files.length(); i++) {
             JSONObject file = files.optJSONObject(i); if (file == null) continue;
             String path = file.optString("path", "").replace('\\', '/');
@@ -311,6 +519,15 @@ public class MainActivity extends Activity {
             for (int p = 0; p < parts.length - 1; p++) parentId = findOrCreateDirectory(tree, parentId, parts[p]);
             String name = parts[parts.length - 1];
             String id = findChild(tree, parentId, name);
+            if (id != null) {
+                Uri oldUri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
+                try (InputStream old = getContentResolver().openInputStream(oldUri); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+                    if (old != null) { byte[] buffer = new byte[8192]; int n; while ((n = old.read(buffer)) > 0) { if (bytes.size() + n > MAX_PROJECT_FILE) throw new IOException("已有文件过大，无法建立保存回滚副本: " + path); bytes.write(buffer, 0, n); } }
+                    previousContents.put(path, bytes.toByteArray());
+                }
+            } else {
+                createdPaths.add(path);
+            }
             Uri target;
             if (id == null) {
                 Uri created = DocumentsContract.createDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, parentId), "text/plain", name);
@@ -324,25 +541,49 @@ public class MainActivity extends Activity {
                 output.write(data);
             }
         }
-        if (previousFiles != null) {
-            for (int i = 0; i < previousFiles.length(); i++) {
-                String oldPath = previousFiles.optString(i, "");
-                if (!isSafeProjectPath(oldPath) || currentPaths.contains(oldPath)) continue;
-                String oldId = findDocumentByPath(tree, oldPath);
-                if (oldId != null) DocumentsContract.deleteDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, oldId));
-            }
-        }
         JSONObject manifest = new JSONObject();
         manifest.put("format", 1);
         manifest.put("name", project.optString("name", "Project"));
+        String language = project.optString("language", "");
+        if ("c".equals(language) || "cpp".equals(language)) manifest.put("language", language);
         manifest.put("files", new JSONArray(currentPaths));
         if (project.has("buildProfiles")) manifest.put("buildProfiles", project.get("buildProfiles"));
         if (project.has("dependencies")) manifest.put("dependencies", project.get("dependencies"));
         writeTextFile(tree, rootId, PROJECT_MANIFEST, manifest.toString(2));
+        committed = true;
+        if (previousFiles != null) {
+            for (int i = 0; i < previousFiles.length(); i++) {
+                String oldPath = previousFiles.optString(i, "");
+                if (!isSafeProjectPath(oldPath) || currentPaths.contains(oldPath)) continue;
+                try {
+                    String oldId = findDocumentByPath(tree, oldPath, rootId);
+                    if (oldId != null) DocumentsContract.deleteDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, oldId));
+                } catch (Exception cleanupError) { Log.w(TAG, "could not remove stale project file " + oldPath, cleanupError); }
+            }
+        }
+        } finally {
+            if (!committed) {
+                for (String path : createdPaths) {
+                    try { String id = findDocumentByPath(tree, path, rootId); if (id != null) DocumentsContract.deleteDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, id)); } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not remove " + path, rollbackError); }
+                }
+                for (Map.Entry<String, byte[]> entry : previousContents.entrySet()) {
+                    try { String id = findDocumentByPath(tree, entry.getKey(), rootId); if (id != null) try (OutputStream output = getContentResolver().openOutputStream(DocumentsContract.buildDocumentUriUsingTree(tree, id), "wt")) { if (output != null) output.write(entry.getValue()); } } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not restore " + entry.getKey(), rollbackError); }
+                }
+                try {
+                    if (previousManifestText != null) writeTextFile(tree, rootId, PROJECT_MANIFEST, previousManifestText);
+                    else {
+                        String id = findChild(tree, rootId, PROJECT_MANIFEST);
+                        if (id != null) DocumentsContract.deleteDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, id));
+                    }
+                } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not restore manifest", rollbackError); }
+            }
+        }
     }
 
-    private JSONObject readManifest(Uri tree) throws Exception {
-        String id = findChild(tree, DocumentsContract.getTreeDocumentId(tree), PROJECT_MANIFEST);
+    private JSONObject readManifest(Uri tree) throws Exception { return readManifest(tree, projectRootId(tree)); }
+
+    private JSONObject readManifest(Uri tree, String rootId) throws Exception {
+        String id = findChild(tree, rootId, PROJECT_MANIFEST);
         if (id == null) return null;
         try {
             return new JSONObject(readText(DocumentsContract.buildDocumentUriUsingTree(tree, id)));
@@ -368,8 +609,12 @@ public class MainActivity extends Activity {
     }
 
     private String findDocumentByPath(Uri tree, String path) throws IOException {
+        return findDocumentByPath(tree, path, projectRootId(tree));
+    }
+
+    private String findDocumentByPath(Uri tree, String path, String rootId) throws IOException {
         if (!isSafeProjectPath(path)) return null;
-        String parentId = DocumentsContract.getTreeDocumentId(tree);
+        String parentId = rootId;
         String[] parts = path.split("/");
         for (int i = 0; i < parts.length; i++) {
             String id = findChild(tree, parentId, parts[i]);
@@ -406,9 +651,7 @@ public class MainActivity extends Activity {
 
     private void notifyProjectError(String message) {
         String safe = message == null ? "项目操作失败" : message;
-        runOnUiThread(() -> {
-            if (web != null) web.evaluateJavascript("window.projectError && window.projectError(" + JSONObject.quote(safe) + ")", null);
-        });
+        showAppError("项目操作失败", new IOException(safe));
     }
 
     private static boolean isSafeName(String name) { return name != null && !name.isEmpty() && !".".equals(name) && !"..".equals(name) && !name.contains("/") && !name.contains("\\"); }
@@ -416,9 +659,11 @@ public class MainActivity extends Activity {
     private static boolean isSafeProjectPath(String path) { return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.contains("..") && !path.endsWith("/"); }
 
     private void installToolchain(Uri uri) throws IOException {
-        File root = new File(getFilesDir(), "toolchain");
-        File staging = new File(getFilesDir(), "toolchain.importing");
-        deleteTree(staging);
+            File root = new File(getFilesDir(), "toolchain");
+            File staging = new File(getFilesDir(), "toolchain.importing");
+            File backup = new File(getFilesDir(), "toolchain.previous");
+            deleteTree(staging);
+            deleteTree(backup);
         if (!staging.mkdirs() && !staging.isDirectory()) throw new IOException("无法创建临时目录");
         boolean ok = false;
         try {
@@ -468,9 +713,20 @@ public class MainActivity extends Activity {
             try {
                 JSONObject meta = new JSONObject(new String(java.nio.file.Files.readAllBytes(manifest.toPath()), java.nio.charset.StandardCharsets.UTF_8));
                 if (meta.optInt("format", 0) != 1) throw new IOException("不支持的资源包格式");
-                File clang = new File(staging, meta.optString("clang", "bin/clang"));
-                File sysroot = new File(staging, meta.optString("sysroot", "wasi-sysroot"));
+                File clang = safeArchiveChild(staging, meta.optString("clang", "bin/clang"));
+                File sysroot = safeArchiveChild(staging, meta.optString("sysroot", "wasi-sysroot"));
                 if (!clang.isFile() || !sysroot.isDirectory()) throw new IOException("资源包缺少 Clang 或 WASI sysroot");
+                JSONObject checksums = meta.optJSONObject("sha256");
+                if (checksums != null) {
+                    java.util.Iterator<String> names = checksums.keys();
+                    while (names.hasNext()) {
+                        String relative = names.next();
+                        File checked = safeArchiveChild(staging, relative);
+                        if (!checked.isFile() || !sha256(checked).equalsIgnoreCase(checksums.optString(relative))) {
+                            throw new IOException("资源包文件校验失败: " + relative);
+                        }
+                    }
+                }
                 if (!clang.setExecutable(true, false)) throw new IOException("无法启用 Clang 执行权限");
                 for (String executable : new String[]{"clang++", "clang-21", "clang++-21", "clangd", "wasm-ld", "ld.lld"}) {
                     File file = new File(staging, "bin/" + executable);
@@ -479,12 +735,19 @@ public class MainActivity extends Activity {
             } catch (org.json.JSONException e) {
                 throw new IOException("manifest.json 无效", e);
             }
-            deleteTree(root);
-            if (!staging.renameTo(root)) throw new IOException("无法安装资源包");
+            if (root.exists() && !root.renameTo(backup)) throw new IOException("无法暂存旧资源包");
+            if (!staging.renameTo(root)) {
+                if (backup.exists()) backup.renameTo(root);
+                throw new IOException("无法安装资源包");
+            }
+            deleteTree(backup);
             ok = true;
             notifyToolchainProgress(100, "资源包导入完成");
         } finally {
-            if (!ok) deleteTree(staging);
+            if (!ok) {
+                deleteTree(staging);
+                if (!root.exists() && backup.exists()) backup.renameTo(root);
+            }
         }
     }
 
@@ -494,9 +757,37 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) { return -1; }
     }
 
+    private static File safeArchiveChild(File root, String relative) throws IOException {
+        if (relative == null || !relative.matches("[A-Za-z0-9._/-]+") || relative.startsWith("/") || relative.contains("..")) throw new IOException("资源包 manifest 路径无效");
+        File child = new File(root, relative);
+        if (!child.getCanonicalPath().startsWith(root.getCanonicalPath() + File.separator)) throw new IOException("资源包 manifest 路径无效");
+        return child;
+    }
+
+    private static String sha256(File file) throws IOException {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            try (InputStream input = new java.io.FileInputStream(file)) {
+                byte[] buffer = new byte[32768]; int n;
+                while ((n = input.read(buffer)) > 0) digest.update(buffer, 0, n);
+            }
+            StringBuilder value = new StringBuilder();
+            for (byte b : digest.digest()) value.append(String.format(java.util.Locale.ROOT, "%02x", b & 0xff));
+            return value.toString();
+        } catch (java.security.NoSuchAlgorithmException e) { throw new IOException("SHA-256 不可用", e); }
+    }
+
     private void notifyToolchainProgress(int percent, String message) {
+        postToWeb("window.toolchainProgress && window.toolchainProgress(" + percent + "," + JSONObject.quote(message) + ")");
+    }
+
+    private String messageOf(Exception error) {
+        return error.getMessage() == null ? "操作失败" : error.getMessage();
+    }
+
+    private void postToWeb(String script) {
         runOnUiThread(() -> {
-            if (web != null) web.evaluateJavascript("window.toolchainProgress && window.toolchainProgress(" + percent + "," + JSONObject.quote(message) + ")", null);
+            if (!destroyed && web != null) web.evaluateJavascript(script, null);
         });
     }
 
@@ -521,7 +812,7 @@ public class MainActivity extends Activity {
         s.setDisplayZoomControls(false);
         s.setTextZoom(100);                    // 跟随系统字号缩放会打乱固定布局，字号在应用内设置里调
         s.setDefaultTextEncodingName("UTF-8");
-        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
     }
 
     /** 站内资源由 LocalServer 提供；站外链接（文档、API Key 页面）交给系统浏览器。 */
@@ -640,6 +931,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
+        ioExecutor.shutdownNow();
+        // 不中断正在进行的 SAF 写入，让已排队的保存完成
+        projectExecutor.shutdown();
         if (web != null) {
             web.stopLoading();
             web.loadUrl("about:blank");

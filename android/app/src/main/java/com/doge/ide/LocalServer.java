@@ -37,6 +37,8 @@ final class LocalServer implements Closeable {
     private static final String TAG = "DogeIDE";
     private static final String API_PATH = "/api/v1/execution/run";
     private static final String CANCEL_PATH = "/api/v1/execution/cancel";
+    /** 直连执行等待上限：执行本身有 30s 总时限，这里额外覆盖排队时间。 */
+    private static final long DIRECT_RUN_WAIT_MS = 180_000L;
     private static final String TASKS_PATH = "/api/v1/tasks";
     private static final int PREFERRED_PORT = 8787;
     private static final int MAX_BODY = 10 << 20;
@@ -172,6 +174,7 @@ final class LocalServer implements Closeable {
     private static final class Request {
         String method = "GET";
         String path = "/";
+        String query = "";
         boolean keepAlive = true;
         boolean chunked;
         byte[] body;
@@ -190,6 +193,8 @@ final class LocalServer implements Closeable {
         req.method = parts[0].toUpperCase(Locale.US);
         String version = parts.length > 2 ? parts[2] : "HTTP/1.0";
         req.keepAlive = !"HTTP/1.0".equalsIgnoreCase(version);
+        int queryAt = parts[1].indexOf('?');
+        req.query = queryAt < 0 ? "" : parts[1].substring(queryAt + 1);
         req.path = normalizePath(parts[1]);
 
         int contentLength = -1;
@@ -350,6 +355,16 @@ final class LocalServer implements Closeable {
                 String id = rest.substring(0, rest.length() - 7); boolean ok = taskRegistry.cancel(id);
                 return sendBytes(out, req, ok ? 200 : 404, "application/json; charset=utf-8", ("{\"task_id\":\"" + id + "\",\"status\":\"" + (ok ? "canceled" : "not_found") + "\"}").getBytes(StandardCharsets.UTF_8));
             }
+            if ("GET".equals(req.method) && rest.endsWith("/output")) {
+                String id = rest.substring(0, rest.length() - "/output".length());
+                try {
+                    int stdoutOffset = queryInt(req.query, "stdout_offset", 0);
+                    int stderrOffset = queryInt(req.query, "stderr_offset", 0);
+                    JSONObject chunk = taskRegistry.output(id, stdoutOffset, stderrOffset);
+                    if (chunk == null) return sendBytes(out, req, 404, "text/plain", "not found".getBytes(StandardCharsets.UTF_8));
+                    return sendBytes(out, req, 200, "application/json; charset=utf-8", chunk.toString().getBytes(StandardCharsets.UTF_8));
+                } catch (Exception e) { return sendBytes(out, req, 400, "text/plain", e.toString().getBytes(StandardCharsets.UTF_8)); }
+            }
             if ("GET".equals(req.method)) {
                 try { JSONObject task = taskRegistry.get(rest); if (task == null) return sendBytes(out, req, 404, "text/plain", "not found".getBytes(StandardCharsets.UTF_8)); return sendBytes(out, req, 200, "application/json; charset=utf-8", task.toString().getBytes(StandardCharsets.UTF_8)); }
                 catch (Exception e) { return sendBytes(out, req, 500, "text/plain", e.toString().getBytes(StandardCharsets.UTF_8)); }
@@ -359,7 +374,8 @@ final class LocalServer implements Closeable {
             if (!"POST".equals(req.method)) {
                 return sendBytes(out, req, 405, "text/plain; charset=utf-8", "method not allowed".getBytes(StandardCharsets.UTF_8));
             }
-            LocalCompiler.cancelActive();
+            // 只取消直连执行任务，不再误杀队列中的其他任务
+            taskRegistry.cancelDirect();
             return sendBytes(out, req, 200, "application/json; charset=utf-8", "{\"status\":\"canceled\"}".getBytes(StandardCharsets.UTF_8));
         }
         if (API_PATH.equals(req.path)) {
@@ -368,7 +384,17 @@ final class LocalServer implements Closeable {
                         "method not allowed".getBytes(StandardCharsets.UTF_8));
             }
             String request = new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8);
-            String response = compiler.execute(request);
+            String response;
+            try {
+                // 与队列任务共用 TaskRegistry 的单线程 worker，避免并发编译共享目录与进程
+                response = taskRegistry.runBlocking(request, DIRECT_RUN_WAIT_MS);
+            } catch (IllegalStateException full) {
+                return sendBytes(out, req, 429, "application/json; charset=utf-8",
+                        ("{\"status\":\"error\",\"message\":" + JSONObject.quote(full.getMessage()) + "}").getBytes(StandardCharsets.UTF_8));
+            } catch (Exception failed) {
+                return sendBytes(out, req, 500, "application/json; charset=utf-8",
+                        ("{\"status\":\"runtime_error\",\"message\":" + JSONObject.quote(failed.toString()) + "}").getBytes(StandardCharsets.UTF_8));
+            }
             int status = response.contains("\"status\":\"runtime_not_ready\"") ? 503 : 200;
             return sendBytes(out, req, status, "application/json; charset=utf-8", response.getBytes(StandardCharsets.UTF_8));
         }
@@ -377,6 +403,17 @@ final class LocalServer implements Closeable {
                     "method not allowed".getBytes(StandardCharsets.UTF_8));
         }
         return sendAsset(out, req);
+    }
+
+    private static int queryInt(String query, String key, int fallback) {
+        if (query == null || query.isEmpty()) return fallback;
+        for (String pair : query.split("&")) {
+            String[] parts = pair.split("=", 2);
+            if (parts.length == 2 && key.equals(parts[0])) {
+                try { return Math.max(0, Integer.parseInt(parts[1])); } catch (NumberFormatException ignored) { return fallback; }
+            }
+        }
+        return fallback;
     }
 
     private boolean sendAsset(OutputStream out, Request req) throws IOException {
@@ -392,7 +429,7 @@ final class LocalServer implements Closeable {
             return sendBytes(out, req, 404, "text/plain; charset=utf-8",
                     "not found".getBytes(StandardCharsets.UTF_8));
         }
-        writeHead(out, req, 200, mimeOf(name), data.length, "public, max-age=86400");
+        writeHead(out, req, 200, mimeOf(name), data.length, "no-store");
         if (!"HEAD".equals(req.method)) {
             out.write(data);
         }
