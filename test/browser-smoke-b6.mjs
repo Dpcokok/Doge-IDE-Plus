@@ -55,7 +55,7 @@ try {
     { path: 'main.c', code: '#include <stdio.h>\\nint main(void) {\\n  printf("hi\\\\n");\\n  return 0;\\n}\\n' },
     { path: 'src/util.c', code: 'int add(int a, int b) { return a + b; }\\n' } ] };
     resetEditorSession(true); currentFilePath = ''; switchProjectFile('main.c'); renderProjectFiles(); return true; })()`);
-  eq('version: 状态栏显示 1.1.0', await ev('document.getElementById("statusVersion").textContent'), 'Doge IDE+ 1.1.0');
+  eq('version: 状态栏显示 APP_VERSION', await ev('document.getElementById("statusVersion").textContent'), 'Doge IDE+ ' + await ev('APP_VERSION'));
   eq('version: 页面标题', await ev('document.title'), 'Doge IDE+ · 本地 C/C++ 编程');
 
   // ── 各视口：无横向滚动、区域互不重叠、运行按钮可见 ──

@@ -67,8 +67,13 @@ export async function launch({ width = 1557, height = 973, touch = false } = {})
   }
   async function key(k, mods = {}) {
     const modifiers = (mods.alt ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.meta ? 4 : 0) | (mods.shift ? 8 : 0);
-    const named = { Escape: [27, 'Escape'], Enter: [13, 'Enter'], Tab: [9, 'Tab'], F2: [113, 'F2'], ' ': [32, 'Space'] };
-    const [code, codeName] = named[k] || [k.toUpperCase().charCodeAt(0), 'Key' + k.toUpperCase()];
+    const named = { Escape: [27, 'Escape'], Enter: [13, 'Enter'], Tab: [9, 'Tab'], F2: [113, 'F2'], ' ': [32, 'Space'], Backspace: [8, 'Backspace'] };
+    // 标点的 Windows 虚拟键码（不能用字符码：'.' 是 46 = Delete，'#' 是 35 = End）
+    const punct = { '.': [190, 'Period'], '>': [190, 'Period'], ',': [188, 'Comma'], '<': [188, 'Comma'], '-': [189, 'Minus'], '_': [189, 'Minus'],
+      '=': [187, 'Equal'], '+': [187, 'Equal'], ';': [186, 'Semicolon'], ':': [186, 'Semicolon'], '/': [191, 'Slash'], '?': [191, 'Slash'],
+      "'": [222, 'Quote'], '"': [222, 'Quote'], '[': [219, 'BracketLeft'], '{': [219, 'BracketLeft'], ']': [221, 'BracketRight'], '}': [221, 'BracketRight'],
+      '#': [51, 'Digit3'], '(': [57, 'Digit9'], ')': [48, 'Digit0'], '*': [56, 'Digit8'], '&': [55, 'Digit7'], '!': [49, 'Digit1'], '%': [53, 'Digit5'] };
+    const [code, codeName] = named[k] || punct[k] || (/^\d$/.test(k) ? [k.charCodeAt(0), 'Digit' + k] : [k.toUpperCase().charCodeAt(0), 'Key' + k.toUpperCase()]);
     const base = { modifiers, key: k, code: codeName, windowsVirtualKeyCode: code };
     await S('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
     if (k.length === 1 && !mods.ctrl && !mods.alt && !mods.meta) await S('Input.dispatchKeyEvent', { type: 'char', ...base, text: k });

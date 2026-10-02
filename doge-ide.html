@@ -129,10 +129,6 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 
 /* 编辑器标签栏 */
 .tabs{display:flex;align-items:center;background:var(--bg2);border-bottom:1px solid var(--border);padding:0 8px;flex-shrink:0;gap:2px}
-.editor-tools{margin-left:auto;display:flex;align-items:center;gap:6px;padding:4px 0}
-.editor-tool{background:var(--bg3);border:1px solid var(--border);color:var(--fg2);padding:4px 12px;border-radius:var(--radius);font-size:12px;cursor:pointer}
-.editor-tool:hover{color:var(--accent);border-color:var(--accent)}
-.editor-tool:disabled{opacity:.45;cursor:default}
 .import-progress-stall{margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--orange)}
 .import-progress-stall button{flex-shrink:0;padding:8px 14px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;cursor:pointer}
 
@@ -200,6 +196,8 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .CodeMirror-hints .CodeMirror-hint,.CodeMirror-Tern-tooltip{color:var(--ed-fg);padding:3px 8px;border-radius:4px;font-family:var(--font-mono)}
 .CodeMirror-hints .CodeMirror-hint:hover{background:var(--ed-soft)}
 .CodeMirror-hints li.CodeMirror-hint-active,.CodeMirror-hints .CodeMirror-hint-active{background:var(--ed-bracket-bg);color:var(--ed-strong)}
+.CodeMirror-hint .hint-detail{margin-left:14px;color:var(--ed-gutter);font-size:.86em}
+@media (pointer:coarse){ .CodeMirror-hints .CodeMirror-hint{min-height:var(--tap);display:flex;align-items:center;padding:0 12px} }
 
 /* Stdin：并入底部面板，作为一个标签页 */
 .stdin-pane{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -313,7 +311,6 @@ button{-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
   :root{--tap:44px}
   .run-btn,.debug-btn{min-height:var(--tap);padding:0 22px;font-size:15px}
   .debug-bar button{padding:10px 14px;font-size:13px}
-  .editor-tool{min-height:36px;padding:0 16px;font-size:14px}
   .debug-ev{padding:9px 10px;font-size:13px}
   .run-btn kbd{display:none}
   .run-btn:hover{filter:none;transform:none}
@@ -596,11 +593,10 @@ body.kb-open.kb-panel .workbench{grid-template-rows:0 0 minmax(0,1fr)}
   .settings-row input:not([type=checkbox]){min-height:var(--tap)}
   .statusbar{height:30px}
   /* 视觉上保持小尺寸的控件：用透明伪元素把可点区域扩到 44px */
-  .state-chip,.seg,.ftab .close,.editor-tool,.stdin-hint button{position:relative}
+  .state-chip,.seg,.ftab .close,.stdin-hint button{position:relative}
   .state-chip::after{content:'';position:absolute;inset:-9px -2px}
   .seg::after{content:'';position:absolute;inset:-6px -2px}
   .ftab .close::after{content:'';position:absolute;inset:-6px}
-  .editor-tool::after{content:'';position:absolute;inset:-4px -2px}
   .stdin-hint{padding-block:4px}
   .stdin-hint button{min-height:36px}
   .stdin-hint button::after{content:'';position:absolute;inset:-4px -2px}
@@ -690,9 +686,6 @@ body.kb-open .explorer-scrim{bottom:0}
   <div class="editor-col">
     <div class="tabs">
       <div class="file-tabs" id="langTabs" role="tablist" aria-label="打开的文件"></div>
-      <div class="editor-tools">
-        <button type="button" class="editor-tool" id="completeBtn" onpointerdown="event.preventDefault()" onclick="triggerCompletion()" title="代码补全 (Ctrl+Space)" aria-label="代码补全">补全</button>
-      </div>
     </div>
     <div class="breadcrumb" id="breadcrumb"><span class="cur" id="bcFile">未打开文件</span><span class="lang" id="bcLang"></span></div>
     <div class="editor-wrap">
@@ -758,7 +751,7 @@ body.kb-open .explorer-scrim{bottom:0}
   <button class="opt" onclick="adjustFont(-1)" title="减小编辑器字号">A−</button>
   <span class="item opt">UTF-8</span>
   <span class="item opt">空格=4</span>
-  <button id="statusVersion" onclick="openAbout()" title="关于 Doge IDE+">Doge IDE+ 1.1.0</button>
+  <button id="statusVersion" onclick="openAbout()" title="关于 Doge IDE+">Doge IDE+ 1.1.2</button>
 </div>
 
 <div id="layer"></div>
@@ -778,6 +771,11 @@ body.kb-open .explorer-scrim{bottom:0}
         <label for="codeSizeInput">编辑器字号（px）</label>
         <input type="number" id="codeSizeInput" value="14" min="11" max="24" step="1">
         <div class="hint" id="codeSizeHint">11–24，影响编辑器、stdin 与输出区</div>
+      </div>
+      <div class="settings-group">编辑</div>
+      <div class="settings-row">
+        <label class="settings-check"><input type="checkbox" id="autoCompleteInput" checked>输入时自动弹出补全</label>
+        <div class="hint">输入两个字母，或输入 .、->、::、#include 时自动提示；关闭后仍可用 Ctrl+Space 或 编辑 → 代码补全</div>
       </div>
       <div class="settings-group">运行</div>
       <div class="settings-row">
@@ -1096,6 +1094,178 @@ const MODULE_MEMBERS = {
   }
 };
 
+// ═══ 项目头文件：#include "…" 解析与符号索引（离线，不依赖运行库）═══════════
+// 与真实编译的查找顺序一致（LocalCompiler：源文件所在目录 → 项目根 → 构建配置 include_paths）。
+function dirnameOf(path) { const i = String(path).lastIndexOf('/'); return i >= 0 ? String(path).slice(0, i) : ''; }
+// 规范化相对路径：去掉 ./、处理 ../；越出项目根返回 null
+function normalizeProjectPath(path) {
+  const out = [];
+  for (const part of String(path || '').split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') { if (!out.length) return null; out.pop(); continue; }
+    out.push(part);
+  }
+  return out.join('/');
+}
+function isHeaderPath(path) { return /\.(h|hh|hpp|hxx)$/i.test(String(path)); }
+function projectIncludeDirs(fromPath, includePaths) {
+  const dirs = [dirnameOf(fromPath), ''];
+  for (const p of includePaths || []) { const n = normalizeProjectPath(p); if (n !== null) dirs.push(n); }
+  return [...new Set(dirs)];
+}
+// 纯函数：解析 #include "name" 到项目内的文件路径；找不到返回 null
+function resolveProjectInclude(name, fromPath, filePaths, includePaths) {
+  const set = new Set(filePaths);
+  for (const dir of projectIncludeDirs(fromPath, includePaths)) {
+    const p = normalizeProjectPath(dir ? dir + '/' + name : name);
+    if (p && set.has(p)) return p;
+  }
+  return null;
+}
+// 纯函数：#include "…" 里可以写的项目头文件（相对各查找目录的写法），就近目录优先
+function projectHeaderChoices(fromPath, filePaths, includePaths) {
+  const out = [];
+  const seen = new Set();
+  const headers = filePaths.filter(isHeaderPath);
+  for (const dir of projectIncludeDirs(fromPath, includePaths)) {
+    for (const h of headers) {
+      let rel;
+      if (!dir) rel = h;
+      else if (h.startsWith(dir + '/')) rel = h.slice(dir.length + 1);
+      else continue;
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      out.push(rel);
+    }
+  }
+  // 同目录可直接写的在前，其余按路径深度、字母排序
+  return out.sort((a, b) => (a.split('/').length - b.split('/').length) || a.localeCompare(b));
+}
+// 把注释和字符串换成空格（保持长度），避免从里面扫出假符号
+function stripCommentsAndStrings(code) {
+  return String(code || '').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/g, m => m.replace(/[^\n]/g, ' '));
+}
+const C_DECL_SKIP = new Set(['if','for','while','switch','return','sizeof','else','do','case','goto','typedef','struct','union','enum','extern','static','inline','const','volatile','register','unsigned','signed','void','char','short','int','long','float','double','bool','_Bool','auto','restrict','class','namespace','template','typename','public','private','protected','virtual','operator','using','friend','explicit','constexpr','noexcept','new','delete','this','true','false','nullptr','NULL']);
+// 纯函数：从 C/C++ 头文件里提取可补全的符号
+// 返回 [{ name, kind: 'function'|'macro'|'type'|'variable'|'enum'|'field', detail }]
+function extractHeaderSymbols(code) {
+  const src = String(code || '');
+  const text = stripCommentsAndStrings(src);
+  const out = [];
+  const seen = new Set();
+  const add = (name, kind, detail) => {
+    if (!/^[A-Za-z_]\w*$/.test(name) || C_DECL_SKIP.has(name) || seen.has(kind + ':' + name)) return;
+    // include guard（#ifndef FOO_H / #define FOO_H）不算
+    if (kind === 'macro' && /^_*[A-Z0-9_]+_(H|HPP|H_|HPP_|INCLUDED)_*$/.test(name) && !detail) return;
+    seen.add(kind + ':' + name);
+    out.push({ name, kind, detail: detail || '' });
+  };
+  let m;
+  // 宏：#define NAME 或 #define NAME(args)
+  const reDef = /^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)(\([^)]*\))?[ \t]*([^\n]*)/gm;
+  while ((m = reDef.exec(text))) add(m[1], 'macro', (m[2] || '') + (m[3] ? ' ' + m[3].trim() : '').slice(0, 60));
+  // 去掉预处理行，后面只看声明
+  const body = text.replace(/^[ \t]*#[^\n]*(?:\\\n[^\n]*)*/gm, '');
+  // struct / union / enum / class 名与成员；enum 常量
+  const reTag = /\b(struct|union|enum|class)\s+([A-Za-z_]\w*)?\s*(?::[^{;]*)?\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}\s*([A-Za-z_]\w*)?/g;
+  while ((m = reTag.exec(body))) {
+    const [, tag, name, inner, alias] = m;
+    if (name) add(name, 'type', tag);
+    if (alias) add(alias, 'type', tag + (name ? ' ' + name : ''));
+    if (tag === 'enum') {
+      for (const part of inner.split(',')) { const e = /^\s*([A-Za-z_]\w*)/.exec(part); if (e) add(e[1], 'enum', name || alias || 'enum'); }
+    } else {
+      for (const decl of inner.split(';')) {
+        const clean = decl.replace(/\[[^\]]*\]/g, '').replace(/:\s*\d+\s*$/, '');
+        const ids = clean.match(/[A-Za-z_]\w*/g);
+        if (!ids || /\(/.test(clean)) continue;
+        // int a, b;  →  a, b
+        for (const piece of clean.split(',')) { const w = piece.match(/([A-Za-z_]\w*)\s*$/); if (w) add(w[1], 'field', (name || alias || tag) + ' 成员'); }
+      }
+    }
+  }
+  // typedef … NAME;（包括函数指针 typedef int (*cb)(int);）
+  const reTd = /\btypedef\b([^;{}]*?)\b([A-Za-z_]\w*)\s*(?:\)\s*\([^;]*\))?\s*(?:\[[^\]]*\])?\s*;/g;
+  while ((m = reTd.exec(body))) { const fp = /\(\s*\*\s*([A-Za-z_]\w*)\s*\)/.exec(m[0]); add(fp ? fp[1] : m[2], 'type', 'typedef'); }
+  // 顶层（不在 {} 里）的函数声明 / 定义与变量声明。
+  // namespace / extern "C" 的花括号不算嵌套（里面的声明仍是“顶层”）；模板前缀 template<…> 去掉
+  const flat = body
+    .replace(/\bnamespace\s+[A-Za-z_][\w:]*\s*\{/g, m => ' '.repeat(m.length))
+    .replace(/\bnamespace\s*\{/g, m => ' '.repeat(m.length))
+    .replace(/\bextern\s*\{/g, m => ' '.repeat(m.length))
+    .replace(/\btemplate\s*<[^<>]*(?:<[^<>]*>[^<>]*)*>/g, m => ' '.repeat(m.length));
+  // 被去掉的左括号对应的右括号：按深度配对后同样去掉
+  const opens = [];
+  const chars = flat.split('');
+  const bodyChars = body.split('');
+  for (let i = 0; i < bodyChars.length; i++) {
+    if (bodyChars[i] === '{') opens.push(chars[i] === '{');
+    else if (bodyChars[i] === '}') { const real = opens.pop(); if (real === false) chars[i] = ' '; }
+  }
+  let depth = 0, top = '';
+  for (const c of chars) { if (c === '{') { depth++; top += ' '; } else if (c === '}') { depth = Math.max(0, depth - 1); top += ';'; } else top += depth ? (c === '\n' ? '\n' : ' ') : c; }
+  // 每条顶层语句单独匹配：返回类型 + 名字 + (参数)，后面只能跟 const / noexcept / 语句结束
+  // 返回类型：由“标识符 / :: / <模板实参> / * / &”组成，最后要有空白或 * / & 与函数名隔开
+  const reFn = /^\s*((?:[A-Za-z_]\w*|::|<[^<>;]*(?:<[^<>;]*>[^<>;]*)*>|[\s\*&])+?[\s\*&])([A-Za-z_]\w*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*(?:const\s*)?(?:noexcept\s*)?(?:=\s*0\s*)?$/;
+  for (const stmt of top.split(';')) {
+    m = reFn.exec(stmt);
+    if (!m) continue;
+    const ret = m[1].replace(/\s+/g, ' ').trim();
+    if (!ret || /\b(typedef|return|else|sizeof)\b/.test(ret) || C_DECL_SKIP.has(m[2])) continue;
+    add(m[2], 'function', ret.replace(/^((extern|static|inline)\s+)+/, '') + (/[\*&]$/.test(ret) ? '' : ' ') + m[2] + '(' + m[3].replace(/\s+/g, ' ').trim() + ')');
+  }
+  const reVar = /\bextern\s+[^;()]*?\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*;/g;
+  while ((m = reVar.exec(top))) add(m[1], 'variable', 'extern');
+  return out;
+}
+// 带缓存：按内容哈希
+const headerSymbolCache = new Map();
+function headerSymbolsFor(path, code) {
+  const key = path + '\u0000' + hashText(code);
+  let v = headerSymbolCache.get(key);
+  if (!v) {
+    v = extractHeaderSymbols(code);
+    if (headerSymbolCache.size > 200) headerSymbolCache.clear();
+    headerSymbolCache.set(key, v);
+  }
+  return v;
+}
+// 纯函数：从 fromPath 出发，沿 #include "…" 递归收集可见的项目头文件（防环，最多 32 个）
+function reachableProjectHeaders(fromPath, getCode, filePaths, includePaths) {
+  const out = [];
+  const seen = new Set([fromPath]);
+  const queue = [fromPath];
+  while (queue.length && out.length < 32) {
+    const cur = queue.shift();
+    const code = String(getCode(cur) || '');
+    const re = /^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"/gm;
+    let m;
+    while ((m = re.exec(code))) {
+      const p = resolveProjectInclude(m[1].trim(), cur, filePaths, includePaths);
+      if (!p || seen.has(p)) continue;
+      seen.add(p);
+      out.push(p);
+      queue.push(p);
+    }
+  }
+  return out;
+}
+function projectFileCode(path) {
+  if (path === currentFilePath && editor) return editor.getValue();
+  const f = getProjectFile(path);
+  return f ? f.code || '' : '';
+}
+function buildIncludePaths() { try { return (activeBuildProfile().include_paths || []); } catch (e) { return []; } }
+// 当前文件通过 #include "…" 能看到的项目头文件里的符号
+function projectHeaderSymbols() {
+  if (!currentFilePath || !['c', 'cpp'].includes(currentLang)) return [];
+  const paths = project.files.map(f => f.path);
+  const headers = reachableProjectHeaders(currentFilePath, projectFileCode, paths, buildIncludePaths());
+  const out = [];
+  for (const h of headers) for (const s of headerSymbolsFor(h, projectFileCode(h))) out.push(Object.assign({ file: h }, s));
+  return out;
+}
+
 // Autocomplete: language words + identifiers already used in the document
 function dogeCompletions(cm) {
   const word = /[\w$#]+/;
@@ -1107,16 +1277,16 @@ function dogeCompletions(cm) {
   const prefix = line.slice(start + 1, end);
   const doc = cm.getValue();
 
-  // Member access: prefix preceded by `.` or `::`
+  // Member access: prefix preceded by `.` / `->` / `::`
   let mod = null;
   if (start >= 0) {
     const before = line.slice(0, start + 1);
-    const m = before.match(/(\w+)\s*([.:]{1,2})\s*$/);
-    if (m) mod = m[1];
+    const m = before.match(/(\w+)\s*(\.|->|::)\s*$/) || before.match(/[)\]]\s*(\.|->)\s*$/);
+    if (m) mod = m[1] && m[2] ? m[1] : '';
   }
   const isCppMod = mod === 'std';
 
-  if (!prefix.length && !mod) return null;
+  if (!prefix.length && mod === null) return null;
 
   // Collect candidates
   const candidateSet = (langWords, inDoc) => {
@@ -1126,12 +1296,24 @@ function dogeCompletions(cm) {
     return c;
   };
 
-  if (mod) {
+  if (mod !== null) {
     // Member completion from module map + doc usage
     const inDoc = new Set();
-    const re = new RegExp('(?:^|[^\\w$])' + mod.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[.:]{1,2}\\s*([A-Za-z_$][\\w$]*)', 'g');
     let mm;
-    while ((mm = re.exec(doc))) inDoc.add(mm[1]);
+    // 光标所在的半个词本身不算候选（否则输入 q->y 时，文档里这个 “y” 会被当成成员）
+    const cursorAt = cm.indexFromPos(CodeMirror.Pos(cur.line, start + 1));
+    const add = (m) => { if (m.index + m[0].length - m[1].length !== cursorAt) inDoc.add(m[1]); };
+    if (mod) {
+      const re = new RegExp('(?:^|[^\\w$])' + mod.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*(?:\\.|->|::)\\s*([A-Za-z_$][\\w$]*)', 'g');
+      while ((mm = re.exec(doc))) add(mm);
+    }
+    // 这个变量还没用过任何成员（例如指针 q 指向的结构体只通过 p. 访问过）：退而用文档里所有 . / -> 后面出现过的成员名
+    if (!inDoc.size && !(mod && MODULE_MEMBERS[currentLang] && MODULE_MEMBERS[currentLang][mod]) && mod !== 'std') {
+      const any = /(?:\.|->)\s*([A-Za-z_$][\w$]*)/g;
+      while ((mm = any.exec(doc))) add(mm);
+    }
+    // 项目头文件里声明的结构体成员
+    if (mod !== 'std') for (const s of projectHeaderSymbols()) if (s.kind === 'field') inDoc.add(s.name);
     const modMap = (MODULE_MEMBERS[currentLang] || {});
     const modWords = (isCppMod ? COMPLETE_WORDS.cpp : [...(modMap[mod] || [])]).filter(w => w.startsWith(prefix));
     for (const w of modWords) inDoc.add(w);
@@ -1141,9 +1323,23 @@ function dogeCompletions(cm) {
     return { list, from: CodeMirror.Pos(cur.line, start + 1), to: cur };
   }
 
+  // #include "…"：项目里的头文件（相对当前文件目录、项目根、构建配置的 include 路径）
+  if (['c','cpp'].includes(currentLang)) {
+    const inc = /^(\s*#\s*include\s*")([^"]*)$/.exec(line.slice(0, end));
+    if (inc) {
+      const typed = inc[2];
+      const choices = projectHeaderChoices(currentFilePath, project.files.map(f => f.path), buildIncludePaths())
+        .filter(h => h.startsWith(typed) && h !== typed);
+      if (!choices.length) return null;
+      // 光标后若已有收尾引号就不再补
+      const closing = line.charAt(end) === '"' ? '' : '"';
+      return { list: choices.map(h => ({ text: h + closing, displayText: h })), from: CodeMirror.Pos(cur.line, inc[1].length), to: cur };
+    }
+  }
+
   // Preprocessor for c/cpp
   if (['c','cpp'].includes(currentLang) && line.trimStart().startsWith('#') && !/\s/.test(prefix.slice(1))) {
-    const pre = ['#include','#define','#ifdef','#ifndef','#endif','#if','#else','#elif','#pragma','#undef'];
+    const pre = ['#include','#include "','#define','#ifdef','#ifndef','#endif','#if','#else','#elif','#pragma','#undef'];
     const headers = currentLang === 'cpp'
       ? ['#include <iostream>','#include <vector>','#include <string>','#include <algorithm>','#include <map>','#include <unordered_map>','#include <set>','#include <cmath>','#include <cstdlib>','#include <cstring>','#include <cstdio>','#include <memory>','#include <stack>','#include <queue>','#include <deque>','#include <list>','#include <random>','#include <chrono>','#include <thread>','#include <functional>','#include <numeric>','#include <iterator>']
       : ['#include <stdio.h>','#include <stdlib.h>','#include <string.h>','#include <math.h>','#include <stdint.h>','#include <stdbool.h>','#include <limits.h>','#include <float.h>','#include <time.h>','#include <stdarg.h>','#include <ctype.h>','#include <assert.h>'];
@@ -1157,64 +1353,289 @@ function dogeCompletions(cm) {
   const re = /[A-Za-z_$][A-Za-z0-9_$]*/g;
   let mm;
   while ((mm = re.exec(doc))) inDoc.add(mm[0]);
+  // 项目头文件（当前文件 #include "…" 能看到的）里的函数、类型、宏：排在最前，带类型说明
+  const headerItems = [];
+  const headerNames = new Set();
+  for (const s of projectHeaderSymbols()) {
+    if (headerNames.has(s.name) || !s.name.startsWith(prefix) || s.name === prefix) continue;
+    headerNames.add(s.name);
+    headerItems.push({ text: s.name, displayText: s.name, detail: (s.detail || s.kind) + ' · ' + s.file.split('/').pop(), render: renderCompletionItem });
+  }
   const cand = candidateSet(langWords, inDoc);
-  const list = [...cand].filter(w => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(w));
+  const list = [...cand].filter(w => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(w) && !headerNames.has(w));
   list.sort((a, b) => {
     const sa = (langWords.includes(a) ? 1 : 0) + (a.startsWith(prefix.slice(0, 2)) ? 1 : 0);
     const sb = (langWords.includes(b) ? 1 : 0) + (b.startsWith(prefix.slice(0, 2)) ? 1 : 0);
     return sb - sa || a.length - b.length || a.localeCompare(b);
   });
-  if (!list.length) return null;
-  return { list, from: CodeMirror.Pos(cur.line, start + 1), to: cur };
+  const all = headerItems.concat(list);
+  if (!all.length) return null;
+  return { list: all, from: CodeMirror.Pos(cur.line, start + 1), to: cur };
 }
 
-function clangdCompletions(cm) {
-  const cur = cm.getCursor();
-  const fallback = () => dogeCompletions(cm);
-  const initial = fallback();
-  if (!toolchainReady()) return initial;
-  const body = { path: currentFilePath, line: cur.line, column: cur.ch, files: project.files.map(file => ({ path:file.path, code:file.code })) };
-  const source = cm.getValue();
-  const callback = arguments.length > 1 && typeof arguments[1] === 'function' ? arguments[1] : null;
-  fetch('/api/v1/intel/completion', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
-    .then(response => response.ok ? response.json() : Promise.reject(new Error('clangd unavailable')))
-    .then(result => {
-      if (currentFilePath !== body.path || cm.getValue() !== source || cm.getCursor().line !== cur.line || cm.getCursor().ch !== cur.ch || !cm.hasFocus()) return;
-      const items = Array.isArray(result.items) ? result.items : [];
-      const list = items.map(item => typeof item === 'string' ? item : (item.label || item.insertText || '')).filter(Boolean);
-      if (callback) callback(list.length ? { list, from: CodeMirror.Pos(cur.line, Math.max(0, cur.ch - currentCompletionPrefix(cm).length)), to: cur } : initial);
-    }).catch(() => { if (callback && currentFilePath === body.path && cm.getValue() === source && cm.getCursor().line === cur.line && cm.getCursor().ch === cur.ch && cm.hasFocus()) callback(initial); });
-  return initial;
+// ═══ 代码补全：输入时自动弹出 ═══════════════════════════════════════
+// 来源：本地（语言关键字 + 文档里已有的标识符）；运行库就绪时再合并 clangd 的语义候选。
+// 列表打开后由 show-hint 随输入刷新（editorHint 是异步 hint，按当前光标重新计算）。
+const AUTO_COMPLETE_DELAY_MS = 120;
+const COMPLETION_LIMIT = 80;
+function autoCompleteEnabled() { return getSetting('autoComplete', '1') !== '0'; }
+function toggleAutoComplete() {
+  const on = !autoCompleteEnabled();
+  setSetting('autoComplete', on ? '1' : '0');
+  if (!on && editor) editor.closeHint();
+  showToast(on ? '已开启输入时自动补全' : '已关闭输入时自动补全（Ctrl+Space 仍可手动补全）', 'success');
+}
+// 纯函数：根据光标前后的文本和光标所在记号的类型，判断是否自动弹出。
+// 返回 'word' | 'member' | 'preproc' | 'include' | null
+function autoCompleteTrigger(before, after, tokenType) {
+  const b = String(before || '');
+  const t = String(tokenType || '');
+  // 光标后面紧跟字母数字（在标识符中间改字）时不弹，避免只替换半个词
+  if (/^\w/.test(String(after || ''))) return null;
+  if (/\bcomment\b/.test(t)) return null;
+  if (/^\s*#\s*include\s*[<"][\w.\/-]*$/.test(b)) return 'include';
+  if (/\bstring\b/.test(t)) return null;
+  if (/^\s*#\s*[A-Za-z]*$/.test(b)) return 'preproc';
+  // 成员访问：标识符 / ) / ] 后的 . 或 ->，以及 ::
+  if (/(?:(?:[A-Za-z_]\w*|[\])])\s*(?:\.|->)|::)\s*(?:[A-Za-z_]\w*)?$/.test(b)) return 'member';
+  const m = /[A-Za-z_]\w*$/.exec(b);
+  if (!m || m[0].length < 2) return null;
+  // 数字字面量里的字母（0xff、1e10）不算标识符
+  if (/[\w$]$/.test(b.slice(0, m.index))) return null;
+  return 'word';
+}
+// 纯函数：把 clangd 的 CompletionList / CompletionItem[] 转成 { text, displayText, detail }。
+// 插入的是 textEdit.newText / insertText（标识符本身），列表里显示的才是带签名的 label。
+function normalizeClangdCompletionItems(result) {
+  const raw = Array.isArray(result) ? result : (result && Array.isArray(result.items) ? result.items : []);
+  const ordered = raw.map((item, i) => ({ item, i, key: item && typeof item === 'object' && item.sortText ? String(item.sortText) : '' }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.i - b.i));
+  const out = [];
+  const seen = new Set();
+  for (const { item } of ordered) {
+    let text = '', label = '', detail = '';
+    if (typeof item === 'string') { text = label = item.trim(); }
+    else if (item && typeof item === 'object') {
+      const edit = item.textEdit && typeof item.textEdit.newText === 'string' ? item.textEdit.newText : '';
+      text = String(edit || item.insertText || item.filterText || item.label || '');
+      // 片段格式（insertTextFormat=2）去掉 $1 / ${1:x} 占位
+      if (item.insertTextFormat === 2) text = text.replace(/\$\{\d+(?::[^}]*)?\}|\$\d+/g, '');
+      text = text.trim();
+      // clangd 的 label 可能带前导空格或“•”（表示会自动插入 #include）
+      label = String(item.label || text).replace(/^[\s\u2022\u00b7]+/, '').trim();
+      detail = typeof item.detail === 'string' ? item.detail.trim() : '';
+    }
+    // 只接受单个标识符（C/C++ 补全插入的都是名字；for(...) 这类代码片段不自动插入）
+    if (!/^[A-Za-z_][\w]*$/.test(text) || seen.has(text)) continue;
+    seen.add(text);
+    out.push({ text, displayText: label || text, detail });
+    if (out.length >= 200) break;
+  }
+  return out;
+}
+function isSubsequence(needle, hay) {
+  let i = 0;
+  for (let j = 0; j < hay.length && i < needle.length; j++) if (hay[j] === needle[i]) i++;
+  return i === needle.length;
+}
+// 纯函数：按前缀筛选并排序（区分大小写的前缀 > 不区分大小写的前缀 > 子序列），去重，去掉与前缀完全相同的项
+function rankCompletions(items, prefix, limit) {
+  const p = String(prefix || '');
+  const lp = p.toLowerCase();
+  const scored = [];
+  const seen = new Set();
+  (items || []).forEach((it, i) => {
+    const text = typeof it === 'string' ? it : (it && it.text);
+    if (!text || text === p || seen.has(text)) return;
+    const lt = text.toLowerCase();
+    let score;
+    if (text.startsWith(p)) score = 0;
+    else if (lt.startsWith(lp)) score = 1;
+    else if (lp && isSubsequence(lp, lt)) score = 2;
+    else return;
+    seen.add(text);
+    scored.push({ it, score, i });
+  });
+  scored.sort((a, b) => a.score - b.score || a.i - b.i);
+  return scored.slice(0, limit || COMPLETION_LIMIT).map(x => x.it);
 }
 function currentCompletionPrefix(cm) { const cur=cm.getCursor(), line=cm.getLine(cur.line).slice(0,cur.ch); const match=line.match(/[A-Za-z_][A-Za-z0-9_]*$/); return match ? match[0] : ''; }
-
-// Auto-trigger completion while typing
+function renderCompletionItem(el, self, data) {
+  el.appendChild(document.createTextNode(data.displayText || data.text));
+  if (data.detail) {
+    const d = document.createElement('span');
+    d.className = 'hint-detail';
+    d.textContent = data.detail;
+    el.appendChild(d);
+  }
+}
+// 当前光标所在“词”的位置；key 相同表示还在同一个词里（clangd 结果可复用）
+function completionState(cm) {
+  const cur = cm.getCursor();
+  const line = cm.getLine(cur.line) || '';
+  const prefix = currentCompletionPrefix(cm);
+  const start = cur.ch - prefix.length;
+  return { cur, line, prefix, start, key: currentFilePath + '\u0000' + cur.line + '\u0000' + start + '\u0000' + line.slice(0, start) };
+}
+// 按当前光标组装补全结果；remote 为 clangd 候选
+function buildCompletionResult(cm, remote) {
+  const s = completionState(cm);
+  const local = dogeCompletions(cm);
+  if (!remote || !remote.length) {
+    if (!local) return null;
+    // 本地结果的替换起点可能是行首（预处理指令）或词首
+    const list = rankCompletions(local.list, cm.getRange(local.from, s.cur));
+    return list.length ? { list, from: local.from, to: s.cur } : null;
+  }
+  const localList = local && local.from.ch === s.start ? local.list : [];
+  const list = rankCompletions(remote.concat(localList), s.prefix)
+    .map(it => typeof it === 'string' ? it : Object.assign({}, it, { render: renderCompletionItem }));
+  return list.length ? { list, from: CodeMirror.Pos(s.cur.line, s.start), to: s.cur } : null;
+}
+// clangd 候选缓存：同一个词里继续输入时在本地筛选，不再请求（结果不完整 isIncomplete 时除外）
+const clangdCompletionCache = { key: '', prefix: '', items: null, incomplete: false, pendingKey: '', pending: null };
+function requestClangdCompletions(s) {
+  const c = clangdCompletionCache;
+  const reqKey = s.key + '\u0000' + s.prefix;
+  if (c.pending && c.pendingKey === reqKey) return c.pending;
+  const body = { path: currentFilePath, line: s.cur.line, column: s.cur.ch, files: project.files.map(f => ({ path: f.path, code: f.code })), build: activeBuildProfile() };
+  const p = fetchJsonWithTimeout('/api/v1/intel/completion', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  }, 6000).then(result => {
+    Object.assign(c, { key: s.key, prefix: s.prefix, items: normalizeClangdCompletionItems(result), incomplete: !!(result && result.isIncomplete) });
+  }).catch(() => {
+    // clangd 不可用：这个词里不再重试，只用本地候选
+    Object.assign(c, { key: s.key, prefix: s.prefix, items: [], incomplete: false });
+  }).finally(() => {
+    if (c.pending === p) { c.pending = null; c.pendingKey = ''; }
+  });
+  c.pending = p;
+  c.pendingKey = reqKey;
+  return p;
+}
+// deliver(result, final)：可能先给本地结果（final=false），clangd 回来后再给合并结果（final=true）
+function gatherCompletions(cm, deliver) {
+  const s = completionState(cm);
+  if (!toolchainReady() || /^\s*#/.test(s.line)) { deliver(buildCompletionResult(cm, null), true); return; }
+  const c = clangdCompletionCache;
+  if (c.items && c.key === s.key && s.prefix.startsWith(c.prefix) && (!c.incomplete || s.prefix === c.prefix)) {
+    deliver(buildCompletionResult(cm, c.items), true);
+    return;
+  }
+  deliver(buildCompletionResult(cm, null), false);
+  requestClangdCompletions(s).then(() => {
+    if (cm !== editor || completionState(cm).key !== s.key) return; // 已经离开这个词
+    deliver(buildCompletionResult(cm, c.key === s.key ? c.items : null), true);
+  });
+}
+// show-hint 的异步 hint：列表打开期间每次输入都按当前光标重新计算
+function editorHint(cm, callback) {
+  gatherCompletions(cm, (data, final) => {
+    if (data && data.list.length) { callback(data); return; }
+    // 没有可显示的：先藏起旧列表（避免选中过期候选）；确定没有时结束这次补全，下次输入再判断
+    callback(null);
+    if (final) setTimeout(() => { const cs = cm.state.completionActive; if (cs && !cs.widget) cm.closeHint(); }, 0);
+  });
+}
+editorHint.async = true;
+let completionOpenId = 0;
+function openCompletion(cm, manual) {
+  const id = ++completionOpenId;
+  gatherCompletions(cm, (data, final) => {
+    if (id !== completionOpenId || cm !== editor || !cm.hasFocus() || cm.getOption('readOnly')) return;
+    const cs = cm.state.completionActive;
+    if (data && data.list.length) {
+      if (cs) { if (typeof cs.update === 'function') cs.update(); return; }
+      cm.showHint({ hint: editorHint, completeSingle: false });
+    } else if (final && manual && !(cs && cs.widget)) {
+      showToast('当前位置没有补全建议', 'info');
+    }
+  });
+}
+function hintWidgetOpen(cm) {
+  const cs = cm && cm.state && cm.state.completionActive;
+  return !!(cs && cs.widget && cs.data && cs.data.list && cs.data.list.length);
+}
+// 接受当前高亮的候选；列表没打开时返回 false（Tab 照常缩进）
+function acceptCompletion(cm) {
+  if (!hintWidgetOpen(cm)) return false;
+  cm.state.completionActive.widget.pick();
+  return true;
+}
+let autoCompleteTimer = null;
+function scheduleAutoComplete(cm) {
+  clearTimeout(autoCompleteTimer);
+  const path = currentFilePath;
+  autoCompleteTimer = setTimeout(() => {
+    if (cm !== editor || path !== currentFilePath || !autoCompleteEnabled()) return;
+    if (!cm.hasFocus() || cm.getOption('readOnly') || cm.somethingSelected()) return;
+    const cs = cm.state.completionActive;
+    if (cs && cs.widget) return;
+    const cur = cm.getCursor();
+    const line = cm.getLine(cur.line) || '';
+    const token = cm.getTokenAt(cur, true);
+    if (!autoCompleteTrigger(line.slice(0, cur.ch), line.slice(cur.ch), token && token.type)) return;
+    openCompletion(cm, false);
+  }, AUTO_COMPLETE_DELAY_MS);
+}
+// 输入时自动弹出补全。1.0.x 在 APK 内关掉了它，因为当时 Tab / 输入法吞字；
+// 根因是 contenteditable 输入模式，已改为 inputStyle:'textarea'，所以 APK 内也启用。
+// 输入法组字（Android 键盘在英文下也会组字，变更来源为 *compose）同样触发。
 function bindAutoComplete() {
-  // Android IME composition can conflict with delayed hint replacement after Tab.
-  // Explicit Ctrl+Space completion remains available.
-  if (window.DogeNative) return;
-  let timer = null;
   editor.on('inputRead', (cm, change) => {
-    if (change.origin !== '+input' && change.origin !== 'complete') return;
-    const ch = change.text.join('');
-    if (!/[A-Za-z0-9_$.#]/.test(ch)) return;
-    clearTimeout(timer);
-    const path = currentFilePath;
-    const source = cm.getValue();
-    const cursor = cm.getCursor();
-    timer = setTimeout(() => {
-      if (path !== currentFilePath || source !== cm.getValue() || cursor.line !== cm.getCursor().line || cursor.ch !== cm.getCursor().ch || !cm.hasFocus()) return;
-      const show = (w) => { if (w && w.list && w.list.length && cm.hasFocus()) cm.showHint({ hint: () => w, completeSingle: false }); };
-      if (toolchainReady()) {
-        clangdCompletions(cm, show);
-      } else {
-        show(dogeCompletions(cm));
-      }
-    }, 180);
+    if (change.origin !== '+input' && change.origin !== '*compose') return;
+    if (!autoCompleteEnabled()) return;
+    const cs = cm.state.completionActive;
+    if (cs && cs.widget) return; // 列表已打开：show-hint 随输入自己刷新
+    scheduleAutoComplete(cm);
   });
   editor.on('change', (cm, change) => {
-    if (change.origin !== '+input' && change.origin !== 'complete') clearTimeout(timer);
+    if (change.origin !== '+input' && change.origin !== '*compose') clearTimeout(autoCompleteTimer);
   });
+  editor.on('blur', () => clearTimeout(autoCompleteTimer));
+  // Tab / Enter 接受当前选中的候选。
+  // 1) 真实按键：在捕获阶段、CodeMirror 键位表之前处理（有的 Android 键盘 / 输入法组合下，
+  //    show-hint 的键位表收不到 Tab，Tab 就被当成缩进）。
+  // 2) 有的输入法不发 Tab 键，而是把 "\t" 当文字送进来（keyCode 229）：在它插入前拦下，改为接受候选。
+  const input = editor.getInputField();
+  let tabDuringCompose = false;
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (!hintWidgetOpen(editor)) return;
+    e.preventDefault(); e.stopPropagation();
+    // 输入法还在组字（最后一个字母没上屏）：等组字提交、列表按新前缀刷新后再接受
+    if (e.isComposing || (editor.display.input && editor.display.input.composing)) { tabDuringCompose = true; return; }
+    acceptCompletion(editor);
+  }, true);
+  input.addEventListener('compositionend', () => {
+    if (!tabDuringCompose) return;
+    tabDuringCompose = false;
+    setTimeout(() => {
+      const cs = editor.state.completionActive;
+      if (cs && typeof cs.update === 'function') cs.update();
+      setTimeout(() => acceptCompletion(editor), 30);
+    }, 0);
+  });
+  editor.on('beforeChange', (cm, change) => {
+    if (change.origin !== '+input' && change.origin !== '*compose') return;
+    if (!change.text || change.text.length !== 1 || !change.update) return;
+    const t = change.text[0];
+    const m = /^([\s\S]*?)\t$/.exec(t);
+    if (!m || !hintWidgetOpen(cm)) return;
+    // 输入法可能把“最后一个字母 + \t”一起送来：先让字母进去，再接受
+    const rest = m[1];
+    change.cancel();
+    setTimeout(() => {
+      if (rest) cm.replaceRange(rest, cm.getCursor(), cm.getCursor(), '+input');
+      const cs = cm.state.completionActive;
+      if (cs && typeof cs.update === 'function' && rest) cs.update();
+      acceptCompletion(cm) || cm.execCommand('insertTab');
+    }, 0);
+  });
+  // 触控 / 鼠标点选候选时不让编辑器失焦，否则平板上的软键盘会收起再弹出
+  const keepFocus = (e) => { if (e.target && e.target.closest && e.target.closest('.CodeMirror-hints')) e.preventDefault(); };
+  document.addEventListener('pointerdown', keepFocus, true);
+  document.addEventListener('mousedown', keepFocus, true);
 }
 
 // ── Copy with formatting (like VSCode: syntax colors go into the clipboard as HTML) ──
@@ -1548,7 +1969,7 @@ function requestClangdDiagnostics() {
   if (!cm || !toolchainReady()) return;
   const requestId = ++clangdDiagnosticRequest;
   const path = currentFilePath;
-  const body = { path, line:0, column:0, files:project.files.map(file => ({ path:file.path, code:file.code })) };
+  const body = { path, line:0, column:0, files:project.files.map(file => ({ path:file.path, code:file.code })), build: activeBuildProfile() };
   fetch('/api/v1/intel/diagnostics', {
     method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
   }).then(response => response.ok ? response.json() : Promise.reject(new Error('clangd unavailable')))
@@ -1587,6 +2008,7 @@ function lintDocument() {
 
   const known = new Set(LINT_KNOWN[currentLang] || []);
   for (const w of (COMPLETE_WORDS[currentLang] || [])) if (/^[A-Za-z_$][\w$]*$/.test(w)) known.add(w);
+  for (const s of projectHeaderSymbols()) known.add(s.name);
 
   const off = []; off.push(0);
   for (let i = 0; i < doc.length; i++) if (doc[i] === '\n') off.push(i + 1);
@@ -1649,6 +2071,7 @@ const COMMANDS = {
   'edit.find':         { label: '查找', key: 'Ctrl+F', skipInField: true, run: () => editorSearch('find') },
   'edit.replace':      { label: '替换', key: 'Ctrl+H', skipInField: true, run: () => editorSearch('replace') },
   'edit.complete':     { label: '代码补全', key: 'Ctrl+Space', skipInField: true, run: () => triggerCompletion() },
+  'edit.autoComplete': { label: '输入时自动补全', checked: () => autoCompleteEnabled(), run: () => toggleAutoComplete() },
   'view.explorer':     { label: '资源管理器', key: 'Ctrl+B', run: () => toggleSideView('files'), checked: () => !document.getElementById('explorer').hidden && sideView() === 'files' },
   'view.panel':        { label: '底部面板', key: 'Ctrl+J', run: () => togglePanel(), checked: () => document.getElementById('outputPanel').dataset.open === 'true' },
   'view.search':       { label: '在项目中搜索', key: 'Ctrl+Shift+F', run: () => openProjectSearch() },
@@ -1669,7 +2092,7 @@ const COMMANDS = {
 };
 const MENUS = [
   { id: 'file', label: '文件', items: ['file.newFile','file.newProject','file.open','file.save','file.renameProject','-','file.renameFile','file.closeFile','file.delete'] },
-  { id: 'edit', label: '编辑', items: ['edit.find','edit.replace','-','edit.complete'] },
+  { id: 'edit', label: '编辑', items: ['edit.find','edit.replace','-','edit.complete','edit.autoComplete'] },
   { id: 'run',  label: '运行', items: ['run.run','run.cancel','-','run.clear'] },
   { id: 'view', label: '视图', items: ['view.explorer','view.search','view.panel','view.stdin','panel.problems','panel.output','panel.tasks','-','view.fontUp','view.fontDown','-','view.theme'] },
   { id: 'debug',label: '调试', items: ['debug.start'], when: debugEnabled },
@@ -1857,12 +2280,13 @@ function toggleTheme() {
 
 // ═══ 批次 5：快捷键表 / 关于 / 编辑器查找 / 项目内搜索 ═══════════════
 // 版本号与 android/app/build.gradle 的 versionName 保持一致（有单测守护）
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.2';
 // CodeMirror 自己处理、不经过 COMMANDS 的按键，只用于快捷键表展示
 const EDITOR_SHORTCUTS = [
   { label: '撤销 / 重做', key: 'Ctrl+Z / Ctrl+Y' },
   { label: '查找下一个 / 上一个', key: 'Ctrl+G / Ctrl+Shift+G' },
   { label: '全部替换', key: 'Ctrl+Shift+R' },
+  { label: '接受补全建议 / 关闭列表', key: 'Enter 或 Tab / Esc' },
   { label: '缩进 / 取消缩进', key: 'Tab / Shift+Tab' },
   { label: '关闭最上层浮层或对话框', key: 'Esc' }
 ];
@@ -2659,7 +3083,7 @@ function initEditor() {
     viewportMargin: 30,
     inputStyle: 'textarea',
     phrases: { 'Search:': '查找：', '(Use /re/ syntax for regexp search)': '（/正则/ 按正则查找）', 'Replace:': '替换：', 'Replace all:': '全部替换：', 'With:': '替换为：', 'Replace with:': '替换为：', 'Replace?': '替换此处？', 'Yes': '替换', 'No': '跳过', 'All': '全部', 'Stop': '停止' },
-     hintOptions: { hint: dogeCompletions, completeSingle: false },
+    hintOptions: { hint: editorHint, completeSingle: false },
     extraKeys: {
       'Ctrl-Enter': () => runCode(),
       'Cmd-Enter': () => runCode(),
@@ -2716,34 +3140,15 @@ function updateEditorAvailability() {
   const empty = document.getElementById('editorEmpty');
   if (editor.getOption('readOnly') !== !file) editor.setOption('readOnly', !file);
   if (empty) empty.hidden = !!file;
-  const completeBtn = document.getElementById('completeBtn');
-  if (completeBtn) completeBtn.disabled = !file;
   if (!file) editor.getInputField().blur();
 }
 
-// 触控可用的补全入口：平板无物理键盘时替代 Ctrl+Space
+// 手动补全（Ctrl+Space / 编辑 → 代码补全）：不受“自动补全”开关和最少字母数限制
 function triggerCompletion() {
   if (!editor || editor.getOption('readOnly')) return;
   editor.focus();
-  const show = (result) => {
-    if (result && result.list && result.list.length) {
-      editor.showHint({ hint: () => result, completeSingle: false });
-    } else {
-      showToast('当前位置没有补全建议', 'info');
-    }
-  };
-  if (toolchainReady()) {
-    // clangd 可用时先给本地候选，clangd 结果回来后替换
-    const cursor = editor.getCursor();
-    const source = editor.getValue();
-    const local = clangdCompletions(editor, (remote) => {
-      const now = editor.getCursor();
-      if (editor.getValue() === source && now.line === cursor.line && now.ch === cursor.ch) show(remote);
-    });
-    if (local && local.list && local.list.length) editor.showHint({ hint: () => local, completeSingle: false });
-  } else {
-    show(dogeCompletions(editor));
-  }
+  clearTimeout(autoCompleteTimer);
+  openCompletion(editor, true);
 }
 
 function getLang(id) {
@@ -4214,7 +4619,8 @@ function initKeybindings() {
   // 这时不能再把同一个 Esc 当成“关下一层”或“停止运行”
   let before = { hint: false, layer: false, stack: 0 };
   document.addEventListener('keydown', () => {
-    before = { hint: !!(editor && editor.state && editor.state.completionActive), layer: layerOpen(), stack: overlayStack.length };
+    const cs = editor && editor.state && editor.state.completionActive;
+    before = { hint: !!(cs && cs.widget), layer: layerOpen(), stack: overlayStack.length };
   }, true);
   document.addEventListener('keydown', (e) => {
     const ctx = keyContext();
@@ -4241,6 +4647,8 @@ function loadSettingsForm() {
   document.getElementById('dependenciesInput').value = (project.dependencies || []).join(',');
   const ctrlI = document.getElementById('ctrlIStdinInput');
   if (ctrlI) ctrlI.checked = ctrlIStdinEnabled();
+  const auto = document.getElementById('autoCompleteInput');
+  if (auto) auto.checked = autoCompleteEnabled();
 }
 function openSettings() {
   loadSettingsForm();
@@ -4272,6 +4680,8 @@ function saveSettings() {
   if (themeSel) { setSetting('theme', themeSel.value); applyTheme(themeSel.value); }
   const ctrlI = document.getElementById('ctrlIStdinInput');
   if (ctrlI) setSetting('ctrlIStdin', ctrlI.checked ? '1' : '0');
+  const auto = document.getElementById('autoCompleteInput');
+  if (auto) { setSetting('autoComplete', auto.checked ? '1' : '0'); if (!auto.checked && editor) editor.closeHint(); }
   saveProject();
   applyCodeSize();
   closeSettings();

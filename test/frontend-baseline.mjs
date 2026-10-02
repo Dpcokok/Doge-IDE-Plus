@@ -33,13 +33,33 @@ function extractFn(name) {
   const re = new RegExp('function ' + name + '\\s*\\(');
   const start = html.search(re);
   if (start < 0) throw new Error('未找到函数: ' + name);
-  // 从函数体第一个 { 起做花括号配平
-  const braceStart = html.indexOf('{', start);
+  // 从函数体第一个 { 起做花括号配平；跳过字符串、模板、注释、正则字面量里的括号
+  const braceStart = html.indexOf('{', html.indexOf(')', start));
   let depth = 0, i = braceStart;
+  let prevSig = '{';
   for (; i < html.length; i++) {
     const c = html[i];
+    if (c === '"' || c === "'" || c === '`') {
+      for (i++; i < html.length && html[i] !== c; i++) if (html[i] === '\\') i++;
+      prevSig = c; continue;
+    }
+    if (c === '/' && html[i + 1] === '/') { i = html.indexOf('\n', i); continue; }
+    if (c === '/' && html[i + 1] === '*') { i = html.indexOf('*/', i) + 1; continue; }
+    // 正则：前一个有效字符是运算符 / 左括号 / 逗号等时，/ 开始的是正则而不是除号
+    if (c === '/' && /[(,=:[!&|?{};+\-*%<>~^]/.test(prevSig)) {
+      let inClass = false;
+      for (i++; i < html.length; i++) {
+        const d = html[i];
+        if (d === '\\') { i++; continue; }
+        if (d === '[') inClass = true;
+        else if (d === ']') inClass = false;
+        else if (d === '/' && !inClass) break;
+      }
+      prevSig = ')'; continue;
+    }
     if (c === '{') depth++;
     else if (c === '}') { depth--; if (depth === 0) { i++; break; } }
+    if (!/\s/.test(c)) prevSig = c;
   }
   return html.slice(start, i);
 }
@@ -111,7 +131,11 @@ function loadPureFns(names, preamble = '') {
 
 // ── 5. APK 行为不变量(静态存在性断言) ───────────────────────────
 ok('inv: CodeMirror inputStyle textarea', /inputStyle:\s*'textarea'/.test(html));
-ok('inv: APK 禁用自动补全', /function bindAutoComplete[\s\S]{0,200}if \(window\.DogeNative\) return;/.test(html));
+// 1.1.1 起 APK 内也自动弹出补全（Tab 吞字的根因是 contenteditable，已由 inputStyle:'textarea' 修复）；
+// 这里改为守护：自动补全不再按 DogeNative 关闭、可在设置里关闭、输入法组字也能触发
+ok('inv: 自动补全不再在 APK 内关闭', !/function bindAutoComplete[\s\S]{0,300}if \(window\.DogeNative\) return;/.test(html));
+ok('inv: 自动补全支持输入法组字', /change\.origin !== '\+input' && change\.origin !== '\*compose'/.test(html));
+ok('inv: 自动补全可在设置里关闭', /id="autoCompleteInput"/.test(html) && /setSetting\('autoComplete'/.test(html) && /function autoCompleteEnabled/.test(html));
 ok('inv: toolchainReady 真正调用()', /function toolchainReady\(\)[\s\S]{0,200}isToolchainReady\(\)/.test(html));
 ok('inv: 任务请求超时 8000', /TASK_REQUEST_TIMEOUT_MS\s*=\s*8000/.test(html));
 ok('inv: 轮询失败熔断 5', /TASK_POLL_MAX_FAILURES\s*=\s*5/.test(html));
@@ -496,14 +520,191 @@ ok('search: 结果点击跳到对应位置', /closest\('\.sr-hit'\)[\s\S]{0,120}
 ok('search: 编辑时刷新结果', /scheduleDirtyRefresh\(\);\n\s+scheduleSearchRefresh\(\);/.test(html));
 ok('search: 搜索视图结构', ['searchView', 'searchInput', 'searchResults', 'searchSummary'].every(id => html.includes('id="' + id + '"')));
 
+// ── 5h. 输入时自动补全(1.1.1) ─────────────────────────────────────
+{
+  const { autoCompleteTrigger } = loadPureFns(['autoCompleteTrigger']);
+  const t = (b, a = '', ty = null) => autoCompleteTrigger(b, a, ty);
+  eq('ac: 一个字母不弹', t('  p'), null);
+  eq('ac: 两个字母弹', t('  pr'), 'word');
+  eq('ac: 标识符含数字下划线', t('x = my_v2'), 'word');
+  eq('ac: 空行不弹', t('    '), null);
+  eq('ac: 空格后不弹', t('int '), null);
+  eq('ac: 数字字面量 0xff 不弹', t('x = 0xff'), null);
+  eq('ac: 数字字面量 1e10 不弹', t('x = 1e10'), null);
+  eq('ac: 注释里不弹', t('// print', '', 'comment'), null);
+  eq('ac: 字符串里不弹', t('printf("hel', '', 'string'), null);
+  eq('ac: 在词中间改字不弹', t('pri', 'ntf'), null);
+  eq('ac: 后面是括号可以弹', t('pri', '()'), 'word');
+  eq('ac: 成员 .', t('p.'), 'member');
+  eq('ac: 成员 ->', t('node->'), 'member');
+  eq('ac: 成员 -> 后继续输入', t('node->ne'), 'member');
+  eq('ac: 调用结果后的 .', t('get().'), 'member');
+  eq('ac: 下标后的 .', t('a[0].'), 'member');
+  eq('ac: 作用域 ::', t('std::'), 'member');
+  eq('ac: 作用域 :: 后一个字母', t('std::v'), 'member');
+  eq('ac: 浮点数 1. 不弹', t('x = 1.'), null);
+  eq('ac: 减号大于号不是 ->', t('a - >'), null);
+  eq('ac: #include <', t('#include <'), 'include');
+  eq('ac: #include <st', t('#include <st', '', 'string'), 'include');
+  eq('ac: #include "', t('#include "'), 'include');
+  eq('ac: # 预处理指令', t('#'), 'preproc');
+  eq('ac: #inc', t('  #inc'), 'preproc');
+  eq('ac: 空参数', autoCompleteTrigger(undefined, undefined, undefined), null);
+}
+{
+  // 本地成员补全：光标所在的半个词不算候选；-> 与 . 都识别
+  const src = extractFn('dogeCompletions');
+  const make = (text, line, ch) => {
+    const lines = text.split('\n');
+    const cm = {
+      getCursor: () => ({ line, ch }), getLine: (n) => lines[n], getValue: () => text,
+      indexFromPos: (p) => lines.slice(0, p.line).reduce((a, l) => a + l.length + 1, 0) + p.ch
+    };
+    const CodeMirror = { Pos: (l, c) => ({ line: l, ch: c }) };
+    const fn = new Function('CodeMirror', 'COMPLETE_WORDS', 'MODULE_MEMBERS', 'currentLang', 'projectHeaderSymbols', 'renderCompletionItem', src + '\nreturn dogeCompletions;')(CodeMirror, { c: ['printf', 'puts'], cpp: [] }, { c: {} }, 'c', () => [], null);
+    return fn(cm);
+  };
+  const doc = 'struct P { int xpos; int ypos; };\nstruct P p; p.xpos = 1; p.ypos = 2;\nstruct P *q = &p;\nq->y';
+  eq('member: q->y 候选不含半个词 y', make(doc, 3, 4).list, ['ypos']);
+  eq('member: q-> 退而用文档里的成员', make(doc.replace(/y$/, ''), 3, 3).list, ['xpos', 'ypos']);
+  eq('member: p.x 用 p 自己用过的成员', make(doc.replace(/q->y$/, 'p.x'), 3, 3).list, ['xpos']);
+  eq('member: get(). 调用结果后的成员', make('s.len = 1;\nget().', 1, 6).list, ['len']);
+}
+{
+  const { normalizeClangdCompletionItems } = loadPureFns(['normalizeClangdCompletionItems']);
+  const r = normalizeClangdCompletionItems({ isIncomplete: false, items: [
+    { label: ' printf(const char *restrict format, ...)', insertText: 'printf', detail: 'int', sortText: '2' },
+    { label: '•puts(const char *s)', textEdit: { newText: 'puts', range: {} }, detail: 'int', sortText: '1' },
+    { label: 'snippet', insertText: 'for(${1:i})', insertTextFormat: 2, sortText: '3' },
+    { label: 'dup', insertText: 'printf', sortText: '4' },
+    { label: 'noinsert', sortText: '5' },
+    { label: '', insertText: '' },
+    null
+  ] });
+  eq('clangd-ac: 按 sortText 排序', r.map(x => x.text), ['puts', 'printf', 'noinsert']);
+  eq('clangd-ac: 插入 textEdit.newText / insertText 而不是 label', r[1].text, 'printf');
+  eq('clangd-ac: 显示 label（去掉前导空格与 •）', [r[0].displayText, r[1].displayText], ['puts(const char *s)', 'printf(const char *restrict format, ...)']);
+  eq('clangd-ac: 保留 detail', r[0].detail, 'int');
+  eq('clangd-ac: 含空白的片段丢弃、重复去重', r.length, 3);
+  eq('clangd-ac: 数组形式', normalizeClangdCompletionItems([{ label: 'abc' }, 'xyz']).map(x => x.text), ['abc', 'xyz']);
+  eq('clangd-ac: 片段占位符去掉后是名字就保留', normalizeClangdCompletionItems({ items: [{ label: 'x', insertText: 'count${1}', insertTextFormat: 2 }] }).map(x => x.text), ['count']);
+  eq('clangd-ac: 空 / 非法', [normalizeClangdCompletionItems({}).length, normalizeClangdCompletionItems(null).length, normalizeClangdCompletionItems({ items: 'x' }).length], [0, 0, 0]);
+}
+{
+  const { rankCompletions } = loadPureFns(['isSubsequence', 'rankCompletions'], 'const COMPLETION_LIMIT = 80;');
+  eq('rank: 区分大小写前缀优先，再不区分大小写，再子序列', rankCompletions(['Print', 'sprintf', 'printf', 'print'], 'pr'), ['printf', 'print', 'Print', 'sprintf']);
+  eq('rank: 不匹配的去掉', rankCompletions(['alpha', 'beta'], 'pr'), []);
+  eq('rank: 子序列排在前缀后面', rankCompletions(['strcpy', 'scanf'], 'sc'), ['scanf', 'strcpy']);
+  eq('rank: 去掉与前缀完全相同的项', rankCompletions(['main', 'mainLoop'], 'main'), ['mainLoop']);
+  eq('rank: 对象项按 text 去重', rankCompletions([{ text: 'abs' }, { text: 'abs' }, 'abort'], 'ab').length, 2);
+  eq('rank: 空前缀保留原顺序', rankCompletions(['b', 'a'], ''), ['b', 'a']);
+  eq('rank: 数量上限', rankCompletions(Array.from({ length: 200 }, (_, i) => 'v' + i), 'v').length, 80);
+}
+ok('ac: 移除工具栏补全按钮', !/id="completeBtn"/.test(html) && !/\.editor-tool\{/.test(html));
+ok('ac: 手动补全不受开关限制', /function triggerCompletion\(\)[\s\S]{0,200}openCompletion\(editor, true\)/.test(html));
+ok('ac: 列表打开期间随输入刷新(异步 hint)', /editorHint\.async = true;/.test(html) && /hintOptions: \{ hint: editorHint/.test(html));
+ok('ac: 点候选不让编辑器失焦(平板不收键盘)', /closest\('\.CodeMirror-hints'\)\) e\.preventDefault\(\)/.test(html));
+ok('ac: 编辑菜单有自动补全开关', /'edit\.autoComplete': \{ label: '输入时自动补全', checked:/.test(html) && /'edit\.complete','edit\.autoComplete'\]/.test(html));
+ok('ac: clangd 结果按词缓存', /const clangdCompletionCache = /.test(html) && /s\.prefix\.startsWith\(c\.prefix\)/.test(html));
+ok('ac: clangd 请求带超时', /fetchJsonWithTimeout\('\/api\/v1\/intel\/completion'/.test(html));
+ok('ac: Esc 只在补全列表可见时算被用掉', /before = \{ hint: !!\(cs && cs\.widget\)/.test(html));
+
+// ── 5i. 项目头文件(1.1.2) ─────────────────────────────────────────
+{
+  const H = loadPureFns(['dirnameOf', 'normalizeProjectPath', 'isHeaderPath', 'projectIncludeDirs', 'resolveProjectInclude', 'projectHeaderChoices']);
+  const files = ['main.c', 'util.h', 'src/app.c', 'src/app.h', 'include/lib.h', 'include/sub/deep.h', 'notes.txt'];
+  eq('inc: 规范化 ./ 与 ..', [H.normalizeProjectPath('./a/./b.h'), H.normalizeProjectPath('src/../util.h'), H.normalizeProjectPath('../x.h')], ['a/b.h', 'util.h', null]);
+  eq('inc: 同目录优先', H.resolveProjectInclude('app.h', 'src/app.c', files), 'src/app.h');
+  eq('inc: 子目录源文件找项目根的头文件', H.resolveProjectInclude('util.h', 'src/app.c', files), 'util.h');
+  eq('inc: 相对上级目录', H.resolveProjectInclude('../util.h', 'src/app.c', files), 'util.h');
+  eq('inc: 带目录写法', H.resolveProjectInclude('include/lib.h', 'main.c', files), 'include/lib.h');
+  eq('inc: 构建配置 include 路径', H.resolveProjectInclude('lib.h', 'main.c', files, ['include']), 'include/lib.h');
+  eq('inc: include 路径带 ./ 和末尾 /', H.resolveProjectInclude('sub/deep.h', 'main.c', files, ['./include/']), 'include/sub/deep.h');
+  eq('inc: 不在查找路径里找不到', H.resolveProjectInclude('lib.h', 'main.c', files), null);
+  eq('inc: 越出项目根找不到', H.resolveProjectInclude('../../etc/x.h', 'src/app.c', files), null);
+  eq('inc: 可选头文件（main.c）', H.projectHeaderChoices('main.c', files), ['util.h', 'include/lib.h', 'src/app.h', 'include/sub/deep.h']);
+  eq('inc: 可选头文件（src/app.c，同目录的写法在前）', H.projectHeaderChoices('src/app.c', files).slice(0, 2), ['app.h', 'util.h']);
+  eq('inc: 可选头文件含 include 路径下的短写法', H.projectHeaderChoices('main.c', files, ['include']).slice(0, 3), ['lib.h', 'util.h', 'include/lib.h']);
+  ok('inc: 非头文件不列出', !H.projectHeaderChoices('main.c', files).some(x => x.endsWith('.txt') || x.endsWith('.c')));
+}
+{
+  const { extractHeaderSymbols } = loadPureFns(['stripCommentsAndStrings', 'extractHeaderSymbols'], (html.match(/const C_DECL_SKIP = [^\n]+/) || [''])[0]);
+  const hdr = [
+    '#ifndef UTIL_H', '#define UTIL_H', '#include <stdio.h>',
+    '#define MAX_ITEMS 64', '#define SQUARE(x) ((x) * (x))',
+    '/* int commented_out(void); */', '// void also_commented(int);',
+    'typedef struct Point { int x; int y; } Point;',
+    'struct Node { int value; struct Node *next; };',
+    'typedef enum { RED, GREEN = 2, BLUE } Color;',
+    'typedef int (*compare_fn)(const void *, const void *);',
+    'typedef unsigned long u64;',
+    'extern int global_count;',
+    'int add_numbers(int a, int b);',
+    'const char *greet(const char *name);',
+    'static inline int clamp(int v, int lo, int hi) { if (v < lo) return lo; return v > hi ? hi : v; }',
+    'void log_msg(const char *fmt, ...);',
+    'const char *label = "not_a_function(int x);";',
+    '#endif'
+  ].join('\n');
+  const syms = extractHeaderSymbols(hdr);
+  const by = (k) => syms.filter(s => s.kind === k).map(s => s.name).sort();
+  eq('hdr: 函数', by('function'), ['add_numbers', 'clamp', 'greet', 'log_msg']);
+  eq('hdr: 宏（去掉 include guard）', by('macro'), ['MAX_ITEMS', 'SQUARE']);
+  eq('hdr: 类型', by('type'), ['Color', 'Node', 'Point', 'compare_fn', 'u64']);
+  eq('hdr: 枚举常量', by('enum'), ['BLUE', 'GREEN', 'RED']);
+  eq('hdr: 结构体成员', by('field'), ['next', 'value', 'x', 'y']);
+  eq('hdr: extern 变量', by('variable'), ['global_count']);
+  ok('hdr: 注释和字符串里的不算', !syms.some(s => /commented|not_a_function/.test(s.name)));
+  ok('hdr: 函数带签名说明', /int add_numbers\(int a, int b\)/.test(syms.find(s => s.name === 'add_numbers').detail));
+  eq('hdr: 函数体内的 return 不算函数', syms.some(s => s.name === 'lo' || s.name === 'hi'), false);
+  eq('hdr: 空', extractHeaderSymbols('').length, 0);
+  const cpp = extractHeaderSymbols('namespace geo {\nclass Shape { public: virtual double area() const; };\n}\nint top_level(int);');
+  ok('hdr: C++ class 名', cpp.some(s => s.name === 'Shape' && s.kind === 'type'));
+  ok('hdr: 顶层函数', cpp.some(s => s.name === 'top_level'));
+  // 真实风格：链表（C）与命名空间 / 模板 / std 返回类型（C++）
+  const list = extractHeaderSymbols('#pragma once\n#include <stddef.h>\ntypedef struct list_node {\n  void *data;\n  struct list_node *prev, *next;\n} list_node_t;\ntypedef struct { list_node_t *head; size_t size; } list_t;\nlist_t *list_create(void);\nvoid list_destroy(list_t *list, void (*free_fn)(void *));\nint list_push_back(list_t *list, void *data);\nsize_t list_size(const list_t *list);\n#define LIST_FOREACH(l, it) for (list_node_t *it = (l)->head; it; it = it->next)');
+  eq('hdr-real: 链表函数', list.filter(s => s.kind === 'function').map(s => s.name), ['list_create', 'list_destroy', 'list_push_back', 'list_size']);
+  eq('hdr-real: 链表类型', list.filter(s => s.kind === 'type').map(s => s.name), ['list_node', 'list_node_t', 'list_t']);
+  eq('hdr-real: 同一行多个成员', list.filter(s => s.kind === 'field').map(s => s.name), ['data', 'prev', 'next', 'head', 'size']);
+  eq('hdr-real: 返回指针的签名', list.find(s => s.name === 'list_create').detail, 'list_t *list_create(void)');
+  const shape = extractHeaderSymbols('#pragma once\n#include <string>\nnamespace geo {\nstruct Vec2 { double x, y; };\nclass Shape {\npublic:\n  virtual ~Shape() = default;\n  virtual double area() const = 0;\n};\nstd::vector<Vec2> make_polygon(int sides, double radius);\nstd::string describe(const Shape &s);\ntemplate <typename T> T clamp_value(T v, T lo, T hi);\n}\nunsigned int hash_bytes(const unsigned char *p, unsigned long n);');
+  eq('hdr-real: 命名空间里的函数 / 模板 / std 返回类型', shape.filter(s => s.kind === 'function').map(s => s.name), ['make_polygon', 'describe', 'clamp_value', 'hash_bytes']);
+  eq('hdr-real: std 模板返回类型签名', shape.find(s => s.name === 'make_polygon').detail, 'std::vector<Vec2> make_polygon(int sides, double radius)');
+  ok('hdr-real: 类成员函数不当成全局函数', !shape.some(s => s.name === 'area' && s.kind === 'function'));
+}
+{
+  const R = loadPureFns(['dirnameOf', 'normalizeProjectPath', 'projectIncludeDirs', 'resolveProjectInclude', 'reachableProjectHeaders']);
+  const code = { 'main.c': '#include "a.h"\n#include <stdio.h>\n// #include "commented.h"\n#include "missing.h"', 'a.h': '#include "b.h"', 'b.h': '#include "a.h"\nint b(void);', 'commented.h': '' };
+  const paths = Object.keys(code);
+  const r = R.reachableProjectHeaders('main.c', p => code[p], paths);
+  eq('reach: 递归收集并防环', r, ['a.h', 'b.h']);
+}
+ok('hdr: 普通候选合并项目头文件符号', /for \(const s of projectHeaderSymbols\(\)\)/.test(html) && /headerItems\.concat\(list\)/.test(html));
+ok('hdr: #include " 列出项目头文件', /projectHeaderChoices\(currentFilePath, project\.files\.map\(f => f\.path\), buildIncludePaths\(\)\)/.test(html));
+ok('hdr: 本地未定义名检查认得头文件符号', /for \(const s of projectHeaderSymbols\(\)\) known\.add\(s\.name\)/.test(html));
+ok('hdr: 补全与诊断请求都带构建配置', (html.match(/code:\s?f(?:ile)?\.code \}\)\), build: activeBuildProfile\(\) \};/g) || []).length >= 2);
+{
+  const clangd = readFileSync(join(root, 'android/app/src/main/java/com/doge/ide/ClangdService.java'), 'utf8');
+  const compiler = readFileSync(join(root, 'android/app/src/main/java/com/doge/ide/LocalCompiler.java'), 'utf8');
+  ok('hdr: clangd 编译参数加项目根 -iquote', /\.put\("-iquote"\)\.put\(root\.getAbsolutePath\(\)\)/.test(clangd));
+  ok('hdr: clangd 编译参数加 include_paths 与宏', /optJSONArray\("include_paths"\)/.test(clangd) && /args\.put\("-D"\+d\)/.test(clangd));
+  ok('hdr: clangd 参数变了就重启', /if \(!json\.equals\(old\)\)[\s\S]{0,160}destroyProcess\(\)/.test(clangd));
+  ok('hdr: 真实编译也加项目根 -iquote', /command\.add\("-iquote"\); command\.add\(work\.getAbsolutePath\(\)\);/.test(compiler));
+}
+// Tab 接受补全
+ok('tab: 捕获阶段拦截 Tab 接受候选', /input\.addEventListener\('keydown', \(e\) => \{\s*if \(e\.key !== 'Tab'[\s\S]{0,600}acceptCompletion\(editor\);\s*\}, true\);/.test(html));
+ok('tab: 输入法组字中的 Tab 等提交后再接受', /addEventListener\('compositionend'[\s\S]{0,200}tabDuringCompose/.test(html));
+ok('tab: 输入法把 \\t 当文字送来也接受', /editor\.on\('beforeChange'[\s\S]{0,500}change\.cancel\(\)/.test(html));
+ok('tab: 没有列表时 Tab 照常缩进', /function acceptCompletion\(cm\) \{\s*if \(!hintWidgetOpen\(cm\)\) return false;/.test(html));
+
 // ── 5g. 响应式 / 触控 / 收尾(批次 6) ────────────────────────────────
 ok('b6: 默认主题为现代(早期脚本)', /\? __t : 'modern';/.test(html) && /dataset\.theme = 'modern'; \}/.test(html));
 ok('b6: 默认主题为现代(currentTheme/applyTheme)', /getSetting\('theme', 'modern'\)/.test(html) && /theme : 'modern';/.test(html) && !/getSetting\('theme', 'classic'\)/.test(html));
 ok('b6: 经典主题仍可选', /<option value="classic">/.test(html) && /THEMES = \['classic', 'modern'\]/.test(html));
 {
   const gradle = readFileSync(join(root, 'android/app/build.gradle'), 'utf8');
-  ok('b6: versionCode 4', /versionCode 4\b/.test(gradle));
-  ok('b6: versionName 1.1.0', /versionName '1\.1\.0'/.test(gradle));
+  ok('b6: versionCode ≥ 4', Number((gradle.match(/versionCode (\d+)/) || [])[1]) >= 4);
+  ok('b6: versionName 1.1.x', /versionName '1\.1\.\d+'/.test(gradle));
   ok('b6: 页面里不再有 1.0.2 版本文案', !/Doge IDE\+ 1\.0\.2/.test(html) && !/APP_VERSION = '1\.0\.2'/.test(html));
 }
 ok('b6: 窄屏覆盖层遮罩', /id="explorerScrim"/.test(html) && /\.explorer:not\(\[hidden\]\)~\.explorer-scrim\{display:block/.test(html));

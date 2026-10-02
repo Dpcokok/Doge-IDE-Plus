@@ -87,9 +87,42 @@ final class ClangdService implements Closeable {
     private File syncWorkspace(JSONObject body) throws Exception {
         File root = new File(filesDir, "workspace/clangd"); if (!root.isDirectory() && !root.mkdirs()) throw new IOException("无法创建 clangd 工作区"); JSONArray files = body.optJSONArray("files");
         if (files != null) for (int i=0;i<files.length();i++) { JSONObject f=files.optJSONObject(i); if(f==null)continue; String p=f.optString("path","").replace('\\','/'); if(!isSafeRelativePath(p))continue; File target=safeChild(root,p); if(target.getParentFile()!=null && !target.getParentFile().isDirectory() && !target.getParentFile().mkdirs()) throw new IOException("无法创建 clangd 文件目录"); java.nio.file.Files.write(target.toPath(),f.optString("code","").getBytes(StandardCharsets.UTF_8)); }
+        // 头文件查找与真实编译一致：源文件所在目录（clang 对 "…" 默认就查）、项目根、构建配置 include_paths；宏定义同样带上
+        JSONObject build = body.optJSONObject("build");
+        JSONArray includePaths = build == null ? null : build.optJSONArray("include_paths");
+        JSONArray defines = build == null ? null : build.optJSONArray("defines");
         JSONArray commands = new JSONArray();
-        if (files != null) for (int i=0;i<files.length();i++) { JSONObject f=files.optJSONObject(i); if(f==null)continue; String p=f.optString("path",""); String lower=p.toLowerCase(); if(!(lower.endsWith(".c")||lower.endsWith(".cc")||lower.endsWith(".cpp")||lower.endsWith(".cxx")))continue; File source=new File(root,p); String compiler=lower.endsWith(".c")?"clang":"clang++"; commands.put(new JSONObject().put("directory",root.getAbsolutePath()).put("file",source.getAbsolutePath()).put("arguments",new JSONArray().put(new File(toolchain,"bin/"+compiler).getAbsolutePath()).put("--target=wasm32-wasip1").put("--sysroot="+new File(toolchain,"wasi-sysroot").getAbsolutePath()).put("-std="+(lower.endsWith(".c")?"c17":"c++20")).put("-fsyntax-only").put(source.getAbsolutePath()))); }
-        java.nio.file.Files.write(new File(root, "compile_commands.json").toPath(), commands.toString(2).getBytes(StandardCharsets.UTF_8));
+        if (files != null) for (int i=0;i<files.length();i++) {
+            JSONObject f=files.optJSONObject(i); if(f==null)continue;
+            String p=f.optString("path","").replace('\\','/'); if(!isSafeRelativePath(p))continue;
+            String lower=p.toLowerCase(java.util.Locale.ROOT);
+            if(!(lower.endsWith(".c")||lower.endsWith(".cc")||lower.endsWith(".cpp")||lower.endsWith(".cxx")))continue;
+            File source=safeChild(root,p); String compiler=lower.endsWith(".c")?"clang":"clang++";
+            JSONArray args = new JSONArray().put(new File(toolchain,"bin/"+compiler).getAbsolutePath()).put("--target=wasm32-wasip1")
+                    .put("--sysroot="+new File(toolchain,"wasi-sysroot").getAbsolutePath()).put("-std="+(lower.endsWith(".c")?"c17":"c++20"))
+                    // -iquote 只作用于 #include "…"，不会让项目里的 math.h 挡住 <math.h>
+                    .put("-iquote").put(root.getAbsolutePath());
+            if (includePaths != null) for (int k=0;k<includePaths.length();k++) {
+                String inc = includePaths.optString(k,"").replace('\\','/');
+                while (inc.startsWith("./")) inc = inc.substring(2);
+                while (inc.endsWith("/")) inc = inc.substring(0, inc.length()-1);
+                if (inc.isEmpty() || !isSafeRelativePath(inc)) continue;
+                args.put("-I"+safeChild(root,inc).getAbsolutePath());
+            }
+            if (defines != null) for (int k=0;k<defines.length();k++) {
+                String d = defines.optString(k,""); if (d.matches("[A-Za-z_][A-Za-z0-9_]*(=.*)?")) args.put("-D"+d);
+            }
+            args.put("-fsyntax-only").put(source.getAbsolutePath());
+            commands.put(new JSONObject().put("directory",root.getAbsolutePath()).put("file",source.getAbsolutePath()).put("arguments",args));
+        }
+        String json = commands.toString(2);
+        File cc = new File(root, "compile_commands.json");
+        // 编译参数变了（例如新增 include 路径）要让 clangd 重新读取：内容不同才写，并重启 clangd
+        String old = cc.isFile() ? read(cc) : "";
+        if (!json.equals(old)) {
+            java.nio.file.Files.write(cc.toPath(), json.getBytes(StandardCharsets.UTF_8));
+            if (!old.isEmpty()) destroyProcess();
+        }
         return root;
     }
     private static String read(File f) throws IOException { return new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); }

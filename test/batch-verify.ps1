@@ -36,8 +36,9 @@ Step '前端基线测试' {
 # 2b. 浏览器冒烟(headless Edge/Chrome 真实驱动；找不到浏览器时自动跳过)
 #     b5：浮层栈、键盘路由、设置/快捷键/关于、查找、项目搜索
 #     b6：多视口布局、触控尺寸、窄屏覆盖层、软键盘、默认主题
+#     completion：输入时自动补全（按键 / 输入法组字 / clangd 模拟 / 触控点选）
 Step '浏览器冒烟测试' {
-  foreach ($t in 'browser-smoke-b5.mjs', 'browser-smoke-b6.mjs') {
+  foreach ($t in 'browser-smoke-b5.mjs', 'browser-smoke-b6.mjs', 'browser-smoke-completion.mjs') {
     & node (Join-Path $root "test/$t")
     if ($LASTEXITCODE -ne 0) { throw "$t exit $LASTEXITCODE" }
   }

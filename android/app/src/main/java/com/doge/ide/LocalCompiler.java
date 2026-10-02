@@ -190,7 +190,8 @@ final class LocalCompiler {
                 Files.write(source.toPath(), file.optString("code", "").getBytes(StandardCharsets.UTF_8));
                 JSONArray args = new JSONArray().put(new File(toolchain, "bin/" + (lower.endsWith(".c") ? "clang" : "clang++")).getAbsolutePath())
                         .put("--target=wasm32-wasip1").put("--sysroot=" + sysroot.getAbsolutePath()).put("-O" + (build == null ? "2" : build.optString("optimization", "2")))
-                        .put("-std=" + (lower.endsWith(".c") ? "c17" : "c++20")).put("-fno-exceptions").put("-fno-rtti").put("-c").put(source.getAbsolutePath());
+                        .put("-std=" + (lower.endsWith(".c") ? "c17" : "c++20")).put("-fno-exceptions").put("-fno-rtti")
+                        .put("-iquote").put(root.getAbsolutePath()).put("-c").put(source.getAbsolutePath());
                 JSONArray defines = build == null ? null : build.optJSONArray("defines");
                 if (defines != null) for (int d = 0; d < defines.length(); d++) args.put("-D" + defines.optString(d));
                 JSONArray includes = build == null ? null : build.optJSONArray("include_paths");
@@ -202,9 +203,12 @@ final class LocalCompiler {
     }
 
     private static void applyBuildOptions(ProcessBuilder process, JSONObject build, File work, File sysroot, DependencyManager dependencyManager) throws Exception {
+        java.util.List<String> command = process.command();
+        // #include "…" 除了源文件所在目录，也在项目根目录查找（子目录里的源文件可以直接 include 根目录的头文件）。
+        // 用 -iquote 而不是 -I：不影响 #include <…>，项目里的 math.h 不会挡住标准库的 <math.h>
+        command.add("-iquote"); command.add(work.getAbsolutePath());
         if (build == null) return;
         String opt = build.optString("optimization", "2");
-        java.util.List<String> command = process.command();
         for (int i = 0; i < command.size(); i++) if ("-O2".equals(command.get(i))) command.set(i, "-O" + (opt.matches("[0-3s]") ? opt : "2"));
         JSONArray defines = build.optJSONArray("defines");
         if (defines != null) for (int i = 0; i < defines.length(); i++) {
