@@ -179,7 +179,7 @@
 每个批次结束都要逐条过：
 
 1. CodeMirror `inputStyle: 'textarea'`；Tab 后连续输入不丢字。
-2. APK 内不自动弹出补全（`bindAutoComplete` 在 `DogeNative` 下返回）。
+2. ~~APK 内不自动弹出补全~~ → 1.1.1 起 APK 内也在输入时自动弹出补全（见 §19）；`inputStyle: 'textarea'` 必须保留，它才是 Tab 吞字的真正修复。
 3. `toolchainReady()` 判断运行库；未就绪时运行给出“请先导入运行库”。
 4. 运行中按钮可点并显示“停止”，点击后进入“正在停止...”。
 5. 任务请求 8 秒超时、连续 5 次失败熔断、总时长上限、停止后 10 秒兜底。
@@ -486,3 +486,59 @@ go build ./...
 - 新增 `test/browser-lib.mjs`（批次 5、6 共用的无依赖 CDP 驱动）与 `test/browser-smoke-b6.mjs`：**83 项全过**，无 JS 异常。覆盖：全新安装默认现代 / 选过经典保持经典；1557×973、964×973、920×900、720×973、600×960 五个视口下无横向滚动、无纵向溢出、运行按钮可见、状态栏贴底、面板与编辑区同宽、编辑器 ≥ 12 行、所有触控目标 ≥ 44px；窄屏覆盖层（真实触摸点遮罩、选文件、Esc、搜索跳转后收起，宽屏偏好不被覆盖）；420px 宽菜单滚动且运行按钮可见；模拟软键盘（编辑器 / stdin / 设置对话框三种焦点）下无溢出、光标行与输入框可见、收起后无残留滚动；设置 / 快捷键 / 新建项目 / 输入框 / 确认框 / 下拉菜单 / 命令面板的触控尺寸；鼠标设备保持紧凑尺寸；prefers-reduced-motion。
 - 批次 5 冒烟 66 项仍全过。`test/batch-verify.ps1`：语法、基线、两组浏览器冒烟、桌面版离线 go build、APK `assembleDebug` 全过。
 - **未在真机验证**：平板在批次 4–6 期间一直未连接 ADB。浏览器模拟覆盖了布局与交互逻辑，但以下只能在设备上确认：真实软键盘高度与 `visualViewport` 行为（模拟是缩小视口，不是真实 IME）、Android WebView 140 的触摸 / 长按、外接键盘逐键、中文输入法下 Ctrl+Space / Ctrl+I、分屏模式下 `sensorLandscape` 与 `resizeableActivity` 的实际尺寸、以及现代主题观感。
+
+
+## 19. 1.1.1：输入时自动弹出补全
+
+### 为什么现在可以在 APK 里打开
+
+1.0.x 在 APK 里关掉自动补全（`bindAutoComplete` 遇到 `DogeNative` 直接返回），是因为当时 Tab 后连续输入会吞字，怀疑是异步补全和输入法抢光标。后来真机确认根因是 CodeMirror 在 Android WebView 默认用 contenteditable 输入模式，改成 `inputStyle: 'textarea'` 后 Tab 已经正常（见 `report/APK-DEEP-CHECK-2026-09-27.md`）。关掉自动补全的理由已经不存在，这一版把它打开，并保留设置开关。
+
+### 行为
+
+- **什么时候弹**（纯函数 `autoCompleteTrigger`）：输入满两个字母的标识符；`.` / `->` / `::` 之后；`#` 开头的预处理指令；`#include <` / `#include "` 之后。注释和字符串里、数字字面量（`0xff`、`1e10`）里、在一个词中间改字时不弹。
+- **输入法**：Android 键盘在英文下也会组字，变更来源是 `*compose`，同样触发（旧代码只认 `+input`，在平板上本来也不会触发）。
+- **列表打开后**：改用 show-hint 的异步 hint（`editorHint`），每次输入按当前光标重新计算，列表随输入收窄；输完整个词、离开这个词、没有候选时自动关闭。Enter / Tab 接受，Esc 关闭。
+- **来源**：本地候选（语言关键字 + 文档里的标识符，成员访问时用文档里出现过的成员名）立即显示；运行库就绪时再请求 clangd，回来后合并并按 clangd 的 `sortText` 排序，显示函数签名与返回类型。
+- **clangd 结果**：同一个词里继续输入时在本地筛选，不重复请求（`isIncomplete` 时除外）；请求带 6 秒超时；服务失败时这个词里只用本地候选。插入的是 `textEdit.newText` / `insertText`（名字本身），不再是带签名的 `label`——旧的手动补全会把 `printf(const char *restrict format, ...)` 整个插进去。
+- **触控**：点选候选时阻止编辑器失焦，平板上软键盘不会收起再弹出；候选项 44px 高。
+- **开关**：设置 → 编辑 →「输入时自动弹出补全」，编辑菜单也有同名勾选项；默认开启，存为 `doge-ide-autoComplete`。关闭后 Ctrl+Space / 编辑 → 代码补全仍可手动触发（手动时一个字母也能补全）。
+- 编辑器标签栏右侧的「补全」按钮删除。
+- 顺带修正：本地成员补全以前只认 `.` 和 `::`，`->` 不识别；输入 `q->y` 时会把光标处这个半截的 `y` 本身当成候选。
+- Esc：只有“看得见的”补全列表才算被 Esc 用掉。没有候选时 show-hint 会留下一个不可见的补全状态，以前它会吞掉运行中按 Esc 停止的那一下。
+
+### 验证
+
+- 基线测试 415 → **470** 项全过：`autoCompleteTrigger` 27 条、`normalizeClangdCompletionItems` 8 条、`rankCompletions` 7 条、本地成员补全 4 条，以及接线断言。基线测试的函数抽取改为跳过字符串 / 正则 / 注释里的花括号（原来遇到含 `{` 的正则会截错）。
+- 新增 `test/browser-smoke-completion.mjs`（**45 项全过**）：真实按键逐字输入、模拟输入法组字、列表随输入收窄、Tab / Enter 接受（Enter 不换行）、注释 / 字符串 / 数字不弹、`#inc` 与 `#include <st`、`p.` 与 `q->`、关闭开关后不弹但 Ctrl+Space 可用、Esc 与运行中停止的配合、clangd 模拟（先本地后合并、排序、类型说明、同词不重复请求、插名字不插签名、失败回落）、切换文件关闭列表、触控点选不失焦且 44px。已加进 `batch-verify.ps1`。另外修正了 `test/browser-lib.mjs` 的按键码：`.` 原来发的是 Delete 键码。
+- `batch-verify.ps1` 全过；版本 1.1.1 / versionCode 5，打包 `release/1.1.1/`。
+- **真机待验证**：平板未连接。需要确认中文输入法（拼音组字上屏英文时）与候选列表的配合、真实 clangd 的响应速度与候选质量。
+
+## 20. 1.1.2：Tab 接受补全、项目头文件
+
+### Tab 变成缩进（真机反馈）
+
+桌面浏览器里 Tab 能接受候选，平板上变成缩进。桌面测试走的是“按键 → CodeMirror 键位表 → show-hint 的 Tab: pick”这一条路；平板上 Tab 可能在输入法组字中到达（`isComposing`），或者输入法根本不发 Tab 键、而是把 `\t` 当文字插入（keyCode 229），这两种都绕过了 show-hint 的键位表，落到默认的 `insertTab`。
+
+改法（`bindAutoComplete`）：
+
+- 在编辑器隐藏 textarea 上用**捕获阶段** keydown 拦 Tab：列表可见就 `preventDefault` 并直接 `widget.pick()`，不再依赖键位表。
+- 组字中按 Tab：先记下，等 `compositionend`（最后一个字母上屏、列表按新前缀刷新）后再接受。
+- 输入法把 `\t`（或 `字母+\t`）当文字送来：`beforeChange` 里取消这次插入，先插入字母，再接受候选；列表没打开时照常缩进。
+- 列表不可见（`hintWidgetOpen` 为假）时一律不拦，Tab / Shift+Tab 行为不变。
+
+### 项目头文件
+
+- 新增纯函数：`normalizeProjectPath` / `resolveProjectInclude` / `projectHeaderChoices` / `reachableProjectHeaders` / `extractHeaderSymbols`。查找顺序与真实编译一致：源文件所在目录 → 项目根 → 构建配置 `include_paths`。
+- `extractHeaderSymbols` 从头文件提取：函数（带签名，含 `const char *`、`std::vector<T>` 返回类型、`namespace` 与模板里的声明）、宏（跳过 include guard）、`struct/union/enum/class` 名与 `typedef`（含函数指针）、枚举常量、结构体成员、`extern` 变量。先把注释和字符串换成空格，避免扫出假符号；类里的成员函数不当成全局函数。按内容哈希缓存。
+- 本地补全：普通候选合并当前文件能看到（递归 include，防环，最多 32 个）的头文件符号，排最前并显示签名与文件名；成员补全加入头文件里的结构体成员；`#include "` 列出项目头文件（就近目录的写法在前），接受时补收尾引号；`#inc` 的指令候选加了 `#include "`。
+- 本地“未定义名”检查把头文件符号当作已知，不再标红。
+- clangd：补全 / 诊断请求带上 `build`（构建配置）；`compile_commands.json` 为每个源文件加 `-iquote <项目根>`、`include_paths` 的 `-I`、`defines` 的 `-D`；内容变化时重写并重启 clangd，让新参数生效。
+- 真实编译（`LocalCompiler.applyBuildOptions`）也加 `-iquote <项目根>`：以前子目录里的源文件 `#include "util.h"`（根目录的头文件）会编译失败。用 `-iquote` 而不是 `-I`，只影响双引号形式，项目里同名的 `math.h` 不会挡住 `<math.h>`（本机 gcc 验证过这个组合）。
+
+### 验证
+
+- 基线测试 470 → **515** 项全过：include 解析 13 条、头文件符号提取 19 条（含两份真实风格的 C / C++ 头文件）、递归收集 1 条、接线断言（含两处 Java 参数）。
+- `test/browser-smoke-completion.mjs` 45 → **69** 项全过：Tab 在组字后 / 组字未上屏时 / 输入法送 `\t` / 输入法送 `字母+\t` 四种情况都能接受，没有列表时照常缩进，Shift+Tab 不接受；头文件函数（带签名和文件名）、宏、子目录头文件、递归 include 的枚举常量、没 include 的不提示、结构体成员、改头文件后候选即时更新、`#include "` 列表 / 子目录写法 / 收尾引号、未定义名检查。
+- `batch-verify.ps1` 全过（含 APK 构建，Java 改动编译通过）。版本 1.1.2 / versionCode 6，打包 `release/1.1.2/`。
+- **真机待验证**：平板未连接。需要确认你的输入法下 Tab 接受候选；clangd 在子目录 / include 路径下的头文件补全与诊断；子目录源文件 include 根目录头文件能编译运行。
