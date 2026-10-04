@@ -849,6 +849,35 @@ for (const sel of ['.header{', '.logo{', '.main{', '.project-panel{', '.project-
   ok('b6: 已删除废弃样式 ' + sel, !html.includes(sel));
 }
 
+// 执行设置：运行请求与前端等待期限使用同一份超时。
+{
+  const captureRunRequest = new Function('id', 'timeout', `
+    let isRunning, taskCancelRequestedAt, activeTaskId, outputData, taskHistory=[];
+    const project={language:id,dependencies:[],files:[{path:id==='python'?'main.py':'main.c',code:'sample'}]};
+    const currentFilePath=project.files[0].path, TASK_REQUEST_TIMEOUT_MS=8000;
+    const document={getElementById:()=>({value:''})}, getSetting=()=>timeout;
+    const setRunButtonState=()=>{}, beginRun=()=>{}, renderOutput=()=>{}, activeBuildProfile=()=>({});
+    const parseDependencyCoordinate=x=>x, bindLiveStdin=()=>{}, renderTaskList=()=>{}, pollTask=async()=>{}, showToast=()=>{}, onRunFinished=()=>{};
+    let sent;
+    const fetchJsonWithTimeout=async(url,options)=>{sent=JSON.parse(options.body);return {task_id:'t1'};};
+    async ${extractFn('runAsTask')}
+    return runAsTask({id,name:id,apiLang:id},'sample','').then(()=>sent);
+  `);
+  eq('py-timeout: Python 请求包含设置的超时', (await captureRunRequest('python',7000)).timeout_ms, 7000);
+  eq('c-timeout: C 请求继续使用设置的超时', (await captureRunRequest('c',7000)).timeout_ms, 7000);
+  const pollBeyondDeadline = new Function(`
+    let calls=0,canceled=false,taskCancelRequestedAt=0,outputData={stdout:'',stderr:''};
+    const Date={now:()=>calls++===0?0:130000}, getSetting=()=>5000;
+    const TASK_REQUEST_TIMEOUT_MS=8000,TASK_POLL_MAX_FAILURES=5,TASK_CANCEL_GRACE_MS=10000;
+    const document={getElementById:()=>({})},taskHistory=[];
+    const appendBoundedOutput=(a,b)=>a+b,updateStderrCount=()=>{},renderTaskList=()=>{},renderOutput=()=>{},showToast=()=>{},onRunFinished=()=>{};
+    const fetchJsonWithTimeout=async url=>{if(url.endsWith('/cancel'))canceled=true;return {phase:'finished',status:'success'};};
+    async ${extractFn('pollTask')}
+    return pollTask('t1',{id:'python',name:'Python'}).then(()=>canceled,()=>canceled);
+  `);
+  ok('py-timeout: 前端等待期限也按设置计算', await pollBeyondDeadline());
+}
+
 // ── 6. 接口契约: DogeNative.* 调用 ⊆ Java @JavascriptInterface ──
 const jsCalls = new Set([...html.matchAll(/DogeNative\.(\w+)/g)].map(m => m[1]));
 const javaMethods = new Set(

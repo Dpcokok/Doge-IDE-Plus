@@ -4247,10 +4247,11 @@ async function runAsTask(lang, code, stdin) {
   renderOutput();
   const profile = { ...activeBuildProfile(), dependencies: (project.dependencies || []).map(parseDependencyCoordinate) };
   const isPy = lang.id === 'python';
+  const timeoutMs = Math.max(1000, Math.min(30000, Number(getSetting('timeout', 30000)) || 30000));
   // Python 走交互模式：预填的 stdin 先写入，之后可在 stdin 框里继续输入
   const body = isPy
-    ? { language: 'python', entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), stdin: stdin || '', interactive: true }
-    : { language: lang.apiLang, entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), build: profile, stdin: stdin || '', timeout_ms: getSetting('timeout', 30000) };
+    ? { language: 'python', entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), stdin: stdin || '', interactive: true, timeout_ms: timeoutMs }
+    : { language: lang.apiLang, entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), build: profile, stdin: stdin || '', timeout_ms: timeoutMs };
   if (isPy) { bindLiveStdin(); const box = document.getElementById('stdinInput'); if (box) box.value = ''; }
   try {
     const created = await fetchJsonWithTimeout('/api/v1/tasks', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }, TASK_REQUEST_TIMEOUT_MS);
@@ -4259,7 +4260,7 @@ async function runAsTask(lang, code, stdin) {
     taskHistory.unshift({ id: created.task_id, status:'queued', language:lang.name, file: currentFilePath, startedAt: Date.now() });
     taskHistory = taskHistory.slice(0, 20);
     renderTaskList();
-    await pollTask(created.task_id, lang);
+    await pollTask(created.task_id, lang, timeoutMs);
   } catch (error) {
     dot.className = 'status-dot error';
     const message = error.message || '任务请求失败';
@@ -4276,12 +4277,12 @@ async function runAsTask(lang, code, stdin) {
   }
 }
 
-async function pollTask(taskId, lang) {
+async function pollTask(taskId, lang, timeoutMs) {
   let stdoutOffset = 0;
   let stderrOffset = 0;
   let failures = 0;
   // 运行超时 + 编译/排队余量；超过即判定任务失联
-  const deadline = Date.now() + (lang.id === 'python' ? 600000 : (Number(getSetting('timeout', 30000)) || 30000)) + 120000;
+  const deadline = Date.now() + (Number(timeoutMs) || Number(getSetting('timeout', 30000)) || 30000) + 120000;
   while (true) {
     if (Date.now() > deadline) {
       try { await fetchJsonWithTimeout('/api/v1/tasks/' + encodeURIComponent(taskId) + '/cancel', { method:'POST' }, 3000); } catch (e) {}
