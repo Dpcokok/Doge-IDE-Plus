@@ -300,6 +300,46 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
   eq('project-open: 未知语言按文件推断', openLanguage({ language:'unknown', files:[{path:'main.cpp'}] }), 'cpp');
 }
 {
+  const languages = html.match(/const LANGUAGES = \[[\s\S]*?\n\];/)[0];
+  const helpers = ['projectLang', 'editorModeForPath'].filter(name => new RegExp('function ' + name + '\\(').test(html));
+  const source = ['getLang', 'isDataFile', 'docFor', 'swapToEmptyDoc', 'switchProjectFile', 'newProjectFile', 'initEditor', ...helpers].map(extractFn).join('\n');
+  const editorHarness = new Function('language', 'path', `
+    ${languages}
+    const project = { language, files:[{path,code:'sample'}] }, projectDocs = new Map(), state = {};
+    let currentFilePath = path, currentLang = language, switchingProjectFile = false, editor, openFiles = [], clangdDiagnosticRequest = 0;
+    const isRunning = false, BP_GUTTER = 'bp', editorHint = () => {};
+    const getProjectFile = p => project.files.find(file => file.path === p);
+    const noop = () => {}, clearTimeout = noop, setTimeout = noop;
+    const buildTabs = noop, loadBreakpoints = noop, loadSavedHashes = noop, loadOpenFiles = noop;
+    const renderEditorTabs = noop, renderBreakpoints = noop, bindAutoComplete = noop, bindRichCopy = noop, updateEditorAvailability = noop;
+    const scheduleLint = noop, persistOpenFiles = noop, updateLangInfo = noop, renderProjectFiles = noop, saveCurrentFile = noop, requestClangdDiagnostics = noop;
+    const document = { getElementById: () => ({}) };
+    const stub = { getWrapperElement: () => ({addEventListener:noop}), on:noop, setValue:noop, closeHint:noop,
+      swapDoc: doc => {state.docMode=doc.mode;}, setOption:(key,value)=>{if(key==='mode')state.optionMode=value;} };
+    const CodeMirror = { Doc:(text,mode)=>({text,mode}), fromTextArea:(el,opts)=>{state.initialMode=opts.mode;return stub;} };
+    const dogeInput = (title,label,seed) => {state.fileName=seed;};
+    ${source}
+    return {
+      doc: () => docFor(path).mode,
+      init: () => {initEditor();return {mode:state.initialMode,language:currentLang};},
+      empty: () => {editor=stub;swapToEmptyDoc();return state.docMode;},
+      switch: () => {editor=stub;currentFilePath='';switchProjectFile(path);return state.optionMode;},
+      fileName: () => {newProjectFile();return state.fileName;}
+    };
+  `);
+  let h = editorHarness('python', 'main.py');
+  eq('py-editor: 文档使用 Python mode', h.doc(), 'python');
+  eq('py-editor: 冷启动保留 Python mode 和语言', h.init(), {mode:'python',language:'python'});
+  eq('py-editor: 无文件时仍使用 Python mode', h.empty(), 'python');
+  eq('py-editor: 切换文件使用 Python mode', h.switch(), 'python');
+  eq('py-editor: 新建文件默认 main.py', h.fileName(), 'main.py');
+  h = editorHarness('cpp', 'main.cpp');
+  eq('cpp-editor: C++ mode 保持不变', h.doc(), 'text/x-c++src');
+  eq('cpp-editor: 新建文件默认 main.cpp', h.fileName(), 'main.cpp');
+  h = editorHarness('python', 'data.csv');
+  eq('data-editor: 数据文件不使用代码语法模式', h.doc(), null);
+}
+{
   const { hashText } = loadPureFns(['hashText']);
   eq('hash: 相同内容相同哈希', hashText('int main(){}'), hashText('int main(){}'));
   ok('hash: 不同内容不同哈希', hashText('a') !== hashText('b'));

@@ -851,7 +851,7 @@ body.kb-open .explorer-scrim{bottom:0}
 <script>
 const LANGUAGES = [
   {
-    id:'c', name:'C', mode:'text/x-csrc', version:'C17',
+    id:'c', name:'C', mode:'text/x-csrc', version:'C17', extension:'c',
     color:'#555555', apiLang:'c',
     packs:['c-libs'],
     sample:`// 🔧 C - Doge IDE
@@ -871,7 +871,7 @@ int main() {
 `
   },
   {
-    id:'cpp', name:'C++', mode:'text/x-c++src', version:'C++20',
+    id:'cpp', name:'C++', mode:'text/x-c++src', version:'C++20', extension:'cpp',
     color:'#f34b7d', apiLang:'cpp',
     packs:['cpp-libs'],
     sample:`// ⚡ C++ - Doge IDE
@@ -889,7 +889,7 @@ int main() {
 `
   },
   {
-    id:'python', name:'Python', mode:'python', version:'Python 3.14',
+    id:'python', name:'Python', mode:'python', version:'Python 3.14', extension:'py',
     color:'#3572A5', apiLang:'python', runtime:'python',
     packs:[],
     sample:`# Python - Doge IDE
@@ -2662,15 +2662,14 @@ function resetEditorSession(markSaved) {
 function docFor(path) {
   if (projectDocs.has(path)) return projectDocs.get(path);
   const file = getProjectFile(path);
-  const lang = project.language === 'cpp' ? getLang('cpp') : getLang('c');
-  const doc = CodeMirror.Doc(file ? (file.code ?? '') : '', lang.mode);
+  const doc = CodeMirror.Doc(file ? (file.code ?? '') : '', editorModeForPath(path));
   projectDocs.set(path, doc);
   return doc;
 }
 // 没有打开任何文件时换上一个空文档，避免编辑器残留上一个文件的内容
 function swapToEmptyDoc() {
   if (!editor) return;
-  const lang = project.language === 'cpp' ? getLang('cpp') : getLang('c');
+  const lang = projectLang();
   switchingProjectFile = true;
   try { editor.swapDoc(CodeMirror.Doc('', lang.mode)); } finally { switchingProjectFile = false; }
 }
@@ -3100,12 +3099,12 @@ function reportSoftwareError(source, message, stack) {
 function buildTabs() { renderEditorTabs(); }
 
 function initEditor() {
-  const lang = project.language === 'cpp' ? getLang('cpp') : getLang('c');
+  const lang = projectLang();
   currentLang = lang.id;
   buildTabs();
   loadBreakpoints();
   editor = CodeMirror.fromTextArea(document.getElementById('codeEditor'), {
-    mode: lang.mode,
+    mode: editorModeForPath(currentFilePath),
     theme: 'doge',
     lineNumbers: true,
     gutters: [BP_GUTTER, 'CodeMirror-linenumbers'],
@@ -3191,6 +3190,9 @@ function triggerCompletion() {
 function getLang(id) {
   return LANGUAGES.find(l => l.id === id);
 }
+
+function projectLang() { return getLang(project.language) || getLang('c'); }
+function editorModeForPath(path) { return isDataFile(path) ? null : projectLang().mode; }
 
 function languageForPath(path) {
   if (/\.py$/i.test(path)) return getLang('python');
@@ -3522,14 +3524,14 @@ function switchProjectFile(path) {
   // 旧文件的诊断/补全请求不再需要
   if (editor) { clearTimeout(editor._clangdTimer); editor.closeHint && editor.closeHint(); }
   clangdDiagnosticRequest++;
-  const lang = project.language === 'cpp' ? getLang('cpp') : getLang('c');
+  const lang = projectLang();
   if (!openFiles.includes(path)) { openFiles.push(path); persistOpenFiles(); }
   currentFilePath = path;
   if (editor) {
     switchingProjectFile = true;
     try {
       editor.swapDoc(docFor(path));
-      editor.setOption('mode', lang.mode);
+      editor.setOption('mode', editorModeForPath(path));
     } finally {
       switchingProjectFile = false;
     }
@@ -3544,7 +3546,7 @@ function switchProjectFile(path) {
   renderProjectFiles();
 }
 function newProjectFile() {
-  const extension = project.language === 'cpp' ? 'cpp' : 'c';
+  const extension = projectLang().extension;
   dogeInput('新建文件', '输入文件名（不要输入目录路径）', 'main.' + extension, (path) => {
     path = path.trim();
     const err = validateFileName(path, project.language);
