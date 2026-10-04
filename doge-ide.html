@@ -1529,8 +1529,13 @@ function requestClangdCompletions(s) {
 }
 // deliver(result, final)：可能先给本地结果（final=false），clangd 回来后再给合并结果（final=true）
 function gatherCompletions(cm, deliver) {
+  if (isDataFile(currentFilePath)) {
+    const cursor = cm.getCursor();
+    deliver({ list: [], from: cursor, to: cursor }, true);
+    return;
+  }
   const s = completionState(cm);
-  if (!toolchainReady() || /^\s*#/.test(s.line)) { deliver(buildCompletionResult(cm, null), true); return; }
+  if (!clangdEnabledForFile() || /^\s*#/.test(s.line)) { deliver(buildCompletionResult(cm, null), true); return; }
   const c = clangdCompletionCache;
   if (c.items && c.key === s.key && s.prefix.startsWith(c.prefix) && (!c.incomplete || s.prefix === c.prefix)) {
     deliver(buildCompletionResult(cm, c.items), true);
@@ -1980,7 +1985,7 @@ let lintTimer = null;
 let clangdDiagnosticRequest = 0;
 function requestClangdDiagnostics() {
   const cm = editor;
-  if (!cm || !toolchainReady()) return;
+  if (!cm || !clangdEnabledForFile()) return;
   const requestId = ++clangdDiagnosticRequest;
   const path = currentFilePath;
   const body = { path, line:0, column:0, files:project.files.map(file => ({ path:file.path, code:file.code })), build: activeBuildProfile() };
@@ -2060,7 +2065,7 @@ function clearLocalLintMarks() {
 // 本地“未定义名”检查只认手工符号表，对 C/C++ 标准库会大量误报；clangd 可用时由 clangd 诊断接管
 function scheduleLint() {
   clearTimeout(lintTimer);
-  if (['c', 'cpp'].includes(currentLang) && toolchainReady()) {
+  if (isDataFile(currentFilePath) || (['c', 'cpp'].includes(currentLang) && clangdEnabledForFile())) {
     clearLocalLintMarks();
     return;
   }
@@ -4178,6 +4183,9 @@ function toolchainReady() {
 function pythonReady() {
   try { return !!(window.DogeNative && typeof DogeNative.isPythonReady === 'function' && DogeNative.isPythonReady()); }
   catch (e) { return false; }
+}
+function clangdEnabledForFile() {
+  return ['c', 'cpp'].includes(projectLang().id) && /\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(currentFilePath) && toolchainReady();
 }
 // 当前项目语言所需运行库是否就绪
 function runtimeReadyFor(langId) { return runtimeKindOf(langId) === 'python' ? pythonReady() : toolchainReady(); }

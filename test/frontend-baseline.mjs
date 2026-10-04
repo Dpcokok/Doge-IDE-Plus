@@ -340,6 +340,39 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
   eq('data-editor: 数据文件不使用代码语法模式', h.doc(), null);
 }
 {
+  const enabled = /function clangdEnabledForFile\(/.test(html) ? extractFn('clangdEnabledForFile') : '';
+  const checkLanguageService = new Function('language', 'path', `
+    const project={language,files:[{path,code:'sample'}]},currentFilePath=path,currentLang=language;
+    let clangdDiagnosticRequest=0, remote=0, scheduled=0, lintTimer=null;
+    const clangdProblems={},clangdCompletionCache={},panelView='output';
+    const editor={getAllMarks:()=>[],getCursor:()=>({line:0,ch:0})},cm=editor;
+    const getLang=id=>({id}),toolchainReady=()=>true,activeBuildProfile=()=>({});
+    const completionState=()=>({line:'sample',key:'key',prefix:'sample'}),buildCompletionResult=()=>({list:['local']});
+    const requestClangdCompletions=()=>{remote++;return Promise.resolve();};
+    const fetch=()=>{remote++;return Promise.resolve({ok:true,json:async()=>({items:[]})});};
+    const updateProblemBadges=()=>{},renderProblems=()=>{},clearTimeout=()=>{},lintDocument=()=>{},setTimeout=()=>{scheduled++;};
+    ${extractFn('isDataFile')}
+    ${extractFn('projectLang')}
+    ${enabled}
+    ${extractFn('gatherCompletions')}
+    ${extractFn('requestClangdDiagnostics')}
+    ${extractFn('clearLocalLintMarks')}
+    ${extractFn('scheduleLint')}
+    let list;
+    gatherCompletions(cm,result=>{list=result.list;});requestClangdDiagnostics();scheduleLint();
+    return {remote,scheduled,list};
+  `);
+  let result = checkLanguageService('python','main.py');
+  eq('intel: 已有 C++ 运行库时 Python 不调用 clangd', result.remote, 0);
+  eq('intel: Python 保留本地补全候选', result.list, ['local']);
+  result = checkLanguageService('python','data.csv');
+  eq('intel: 数据文件不调用 clangd', result.remote, 0);
+  eq('intel: 数据文件不弹出代码补全', result.list, []);
+  eq('intel: 数据文件不运行未定义名检查', result.scheduled, 0);
+  result = checkLanguageService('cpp','main.cpp');
+  eq('intel: C++ 仍调用 clangd 补全和诊断', result.remote, 2);
+}
+{
   const { hashText } = loadPureFns(['hashText']);
   eq('hash: 相同内容相同哈希', hashText('int main(){}'), hashText('int main(){}'));
   ok('hash: 不同内容不同哈希', hashText('a') !== hashText('b'));
