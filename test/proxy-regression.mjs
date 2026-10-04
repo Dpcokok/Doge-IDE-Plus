@@ -16,6 +16,7 @@ function check(name, condition) {
 }
 try {
   fs.mkdirSync(path.join(root, 'web'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'web', 'subdir'));
   fs.mkdirSync(path.join(root, '.git'));
   fs.writeFileSync(path.join(root, 'doge-ide.html'), 'INDEX');
   fs.writeFileSync(path.join(root, 'web', 'asset.txt'), 'ASSET');
@@ -45,6 +46,17 @@ try {
     const response = await get(url);
     check('Node rejects private/traversal path ' + url, response.status >= 400 && !/PRIVATE|OUTSIDE/.test(response.body));
   }
+  for (const url of ['/web/', '/web/subdir']) {
+    let response;
+    try { response = await get(url); } catch { response = { status: 0 }; }
+    check('Node rejects directory without throwing ' + url, response.status === 404);
+  }
+  check('Node still serves files after directory requests', (await get('/')).status === 200);
+  context.readFileSync = () => { const error = new Error('fixture read denied'); error.code = 'EACCES'; throw error; };
+  let unreadable;
+  try { unreadable = await get('/web/asset.txt'); } catch { unreadable = { status: 0 }; }
+  check('Node contains file read errors within the request', unreadable.status === 500);
+  context.readFileSync = fs.readFileSync;
 
   const pythonTest = `
 import importlib.util, http.server, http.client, json, sys, threading

@@ -3,7 +3,7 @@
 // Then open http://localhost:8787 in browser
 
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
 import { join, extname, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -99,11 +99,23 @@ const server = createServer(async (req, res) => {
     res.end('Not found');
     return;
   }
-  const ext = extname(filePath);
-  const mime = MIME[ext] || 'application/octet-stream';
-  const content = readFileSync(filePath);
-  res.writeHead(200, { 'Content-Type': mime });
-  res.end(content);
+  try {
+    if (!statSync(filePath).isFile()) {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
+    }
+    const ext = extname(filePath);
+    const mime = MIME[ext] || 'application/octet-stream';
+    const content = readFileSync(filePath);
+    res.writeHead(200, { 'Content-Type': mime });
+    res.end(content);
+  } catch (error) {
+    // A deleted, locked or unreadable asset must not reject the async handler
+    // and terminate the entire development server.
+    res.writeHead(error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 404 : 500);
+    res.end('Unable to read asset');
+  }
 });
 
 server.listen(PORT, '127.0.0.1', () => {
