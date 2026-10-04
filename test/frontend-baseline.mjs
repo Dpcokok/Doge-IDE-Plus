@@ -350,6 +350,7 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
     const completionState=()=>({line:'sample',key:'key',prefix:'sample'}),buildCompletionResult=()=>({list:['local']});
     const requestClangdCompletions=()=>{remote++;return Promise.resolve();};
     const fetch=()=>{remote++;return Promise.resolve({ok:true,json:async()=>({items:[]})});};
+    const fetchApi=fetch;
     const updateProblemBadges=()=>{},renderProblems=()=>{},clearTimeout=()=>{},lintDocument=()=>{},setTimeout=()=>{scheduled++;};
     ${extractFn('isDataFile')}
     ${extractFn('projectLang')}
@@ -880,6 +881,22 @@ for (const fn of ['toggleProjectPanel', 'toggleExplorer', 'initResize', 'toggleS
 }
 for (const sel of ['.header{', '.logo{', '.main{', '.project-panel{', '.project-head{', '.project-actions{', '.project-resize{', '.project-toggle{', '.editor-panel{', '.tab{', '.packs-toggle{', '.output-header{', '.output-tab{', '.resize-handle{', '.footer{', '.settings-btn{', '.toolchain-btn{', '.settings-panel{', '.hotkey-hint{', '.rail-gap{', '.output-content.debug{']) {
   ok('b6: 已删除废弃样式 ' + sel, !html.includes(sel));
+}
+
+// 执行设置：运行请求与前端等待期限使用同一份超时。
+{
+  const headersFor = new Function('native', 'url', `
+    const window={DogeNative:native?{executionToken:()=>'fixture-session'}:undefined};
+    const DogeNative=window.DogeNative;
+    let captured;
+    const fetch=async(target,options)=>{captured=new Headers(options.headers);return {ok:true,text:async()=>'{}'};};
+    ${extractFn('fetchApi')}
+    async ${extractFn('fetchJsonWithTimeout')}
+    return fetchJsonWithTimeout(url,{headers:{'Content-Type':'application/json','Authorization':'existing'}},1000).then(()=>({token:captured.get('X-Doge-Session'),contentType:captured.get('Content-Type'),authorization:captured.get('Authorization')}));
+  `);
+  eq('auth: 原生 API 请求携带会话令牌并保留已有请求头', await headersFor(true,'/api/v1/tasks'), {token:'fixture-session',contentType:'application/json',authorization:'existing'});
+  eq('auth: 会话令牌不会发往站外地址', (await headersFor(true,'https://example.invalid/api/v1/tasks')).token, null);
+  eq('auth: 桌面与开发代理请求保持兼容', (await headersFor(false,'/api/v1/tasks')).token, null);
 }
 
 // 执行设置：运行请求与前端等待期限使用同一份超时。

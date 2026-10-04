@@ -49,6 +49,7 @@ final class LocalServer implements Closeable {
     private final LocalCompiler compiler;
     private final TaskRegistry taskRegistry;
     private final ClangdService clangd;
+    private final String executionToken = java.util.UUID.randomUUID().toString();
     private ServerSocket serverSocket;
     private ExecutorService workers;
     private volatile boolean running;
@@ -93,6 +94,15 @@ final class LocalServer implements Closeable {
 
     String baseUrl() {
         return "http://127.0.0.1:" + port;
+    }
+
+    String executionToken() { return executionToken; }
+
+    boolean isTrustedOrigin(String target) {
+        try {
+            java.net.URI uri = java.net.URI.create(target);
+            return "http".equalsIgnoreCase(uri.getScheme()) && "127.0.0.1".equals(uri.getHost()) && uri.getPort() == port;
+        } catch (IllegalArgumentException invalid) { return false; }
     }
 
     @Override
@@ -177,6 +187,7 @@ final class LocalServer implements Closeable {
         String query = "";
         boolean keepAlive = true;
         boolean chunked;
+        String executionToken = "";
         byte[] body;
     }
 
@@ -218,6 +229,8 @@ final class LocalServer implements Closeable {
                 }
             } else if (key.equals("transfer-encoding")) {
                 req.chunked = value.toLowerCase(Locale.US).contains("chunked");
+            } else if (key.equals("x-doge-session")) {
+                req.executionToken = value;
             } else if (key.equals("connection")) {
                 String v = value.toLowerCase(Locale.US);
                 if (v.contains("close")) {
@@ -331,6 +344,11 @@ final class LocalServer implements Closeable {
     // ---------------------------------------------------------------- 路由
 
     private boolean respond(OutputStream out, Request req) throws IOException {
+        if (req.path.startsWith("/api/v1/") && !java.security.MessageDigest.isEqual(
+                executionToken.getBytes(StandardCharsets.UTF_8), req.executionToken.getBytes(StandardCharsets.UTF_8))) {
+            return sendBytes(out, req, 401, "application/json; charset=utf-8",
+                    "{\"status\":\"unauthorized\",\"message\":\"本地服务请求未授权\"}".getBytes(StandardCharsets.UTF_8));
+        }
         if (req.path.startsWith("/api/v1/intel/")) {
             if (!"POST".equals(req.method)) return sendBytes(out, req, 405, "text/plain", "method not allowed".getBytes(StandardCharsets.UTF_8));
             try { JSONObject body = new JSONObject(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8)); String method = req.path.endsWith("/completion") ? "textDocument/completion" : req.path.endsWith("/definition") ? "textDocument/definition" : req.path.endsWith("/diagnostics") ? "textDocument/diagnostic" : "textDocument/documentSymbol"; Object result = clangd.request(body, method); return sendBytes(out, req, 200, "application/json; charset=utf-8", result.toString().getBytes(StandardCharsets.UTF_8)); }

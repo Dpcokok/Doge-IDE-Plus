@@ -268,6 +268,9 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String executionToken() { return server == null ? "" : server.executionToken(); }
+
+        @JavascriptInterface
         public boolean hasProjectWorkspace() {
             return getPreferences(MODE_PRIVATE).contains("project_tree_uri");
         }
@@ -844,8 +847,7 @@ public class MainActivity extends Activity {
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             Uri url = request.getUrl();
-            String host = url.getHost();
-            if ("127.0.0.1".equals(host) || "localhost".equals(host)) {
+            if (server != null && server.isTrustedOrigin(url.toString())) {
                 return false;
             }
             try {

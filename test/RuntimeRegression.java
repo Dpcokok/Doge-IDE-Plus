@@ -7,6 +7,8 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -270,6 +272,57 @@ public final class RuntimeRegression {
         check("same dependency coordinate with new contents recompiles", Files.readAllLines(count.toPath()).size() == before + 1);
     }
 
+    private static final class HttpResult {
+        final int status;
+        final String body;
+        HttpResult(int status, String body) { this.status = status; this.body = body; }
+    }
+
+    private static HttpResult http(String base, String path, String body, String token) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(base + path).openConnection();
+        connection.setConnectTimeout(5000);
+        connection.setReadTimeout(5000);
+        if (token != null) connection.setRequestProperty("X-Doge-Session", token);
+        try {
+            if (body != null) {
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json");
+                try (OutputStream output = connection.getOutputStream()) { output.write(body.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+            }
+            int status = connection.getResponseCode();
+            try (InputStream input = status >= 400 ? connection.getErrorStream() : connection.getInputStream()) {
+                return new HttpResult(status, input == null ? "" : new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } finally { connection.disconnect(); }
+    }
+
+    private static void serverSecurityTests() throws Exception {
+        write(root, "assets/index.html", "PUBLIC INDEX");
+        LocalServer server = new LocalServer(new Context(root));
+        String base = server.start();
+        try {
+            String request = pythonRequest("main.py", 3000, "").toString();
+            HttpResult unauthenticated = http(base, "/api/v1/execution/run", request, null);
+            check("an unauthenticated local caller cannot execute app code (status=" + unauthenticated.status + ")", unauthenticated.status == 401);
+            check("incorrect session token cannot execute app code", http(base, "/api/v1/execution/run", request, "incorrect").status == 401);
+            String token = "unavailable-before-fix";
+            try {
+                Method getter = LocalServer.class.getDeclaredMethod("executionToken");
+                getter.setAccessible(true);
+                token = (String) getter.invoke(server);
+            } catch (NoSuchMethodException beforeFix) { }
+            HttpResult allowed = http(base, "/api/v1/execution/run", request, token);
+            check("trusted app requests continue to execute", allowed.status == 200 && "HELLO".equals(new JSONObject(allowed.body).optString("stdout").trim()));
+            check("task output/history also require authentication", http(base, "/api/v1/tasks", null, null).status == 401);
+            check("public app assets remain available", http(base, "/", null, null).status == 200);
+            check("the app's exact origin remains trusted", server.isTrustedOrigin(base + "/"));
+            check("other loopback ports are not trusted WebView pages", !server.isTrustedOrigin("http://127.0.0.1:1/"));
+            check("loopback aliases and foreign schemes cannot access the bridge", !server.isTrustedOrigin(base.replace("127.0.0.1", "localhost")) && !server.isTrustedOrigin(base.replace("http:", "https:")));
+            check("static assets do not disclose the session token", !http(base, "/", null, null).body.contains(token));
+        } finally { server.close(); }
+    }
+
     public static void main(String[] args) throws Exception {
         root = new File(args[0], "runtime");
         root.mkdirs();
@@ -281,7 +334,8 @@ public final class RuntimeRegression {
         if (args[1].equals("lsp") || args[1].equals("all")) lspTests(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("compat")) compatibilityTests(runner, Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("cache") || args[1].equals("all")) cacheTests(Path.of(args[0], "RuntimeChild.exe"));
-        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("server") || args[1].equals("all")) serverSecurityTests();
+        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "server", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }

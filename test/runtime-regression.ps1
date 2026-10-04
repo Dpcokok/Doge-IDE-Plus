@@ -23,6 +23,24 @@ public class Context {
     public Context(File root) { this.root = root; }
     public Context getApplicationContext() { return this; }
     public File getFilesDir() { return root; }
+    public android.content.res.AssetManager getAssets() { return new android.content.res.AssetManager(new File(root, "assets")); }
+}
+'@
+    $sources['AssetManager.java'] = @'
+package android.content.res;
+import java.io.*;
+public final class AssetManager {
+    private final File root;
+    public AssetManager(File root) { this.root = root; }
+    public InputStream open(String name) throws IOException { return new FileInputStream(new File(root, name)); }
+}
+'@
+    $sources['Log.java'] = @'
+package android.util;
+public final class Log {
+    public static int w(String tag, String text) { return 0; }
+    public static int w(String tag, String text, Throwable error) { return 0; }
+    public static int i(String tag, String text) { return 0; }
 }
 '@
     $sources['Build.java'] = @'
@@ -124,7 +142,7 @@ public class JSONArray {
     if ($LASTEXITCODE -ne 0) { throw 'Child-process fixture compilation failed.' }
     $sourcePaths = @(Get-ChildItem -LiteralPath $work -Filter '*.java' | ForEach-Object FullName)
     $sourcePaths += Join-Path $PSScriptRoot 'RuntimeRegression.java'
-    foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'ClangdService.java', 'RuntimeCompat.java') {
+    foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'ClangdService.java', 'RuntimeCompat.java', 'LocalServer.java') {
         $sourcePaths += Join-Path $repoRoot "android/app/src/main/java/com/doge/ide/$name"
     }
     & $javac -encoding UTF-8 --release 17 -classpath $gson -d (Join-Path $work 'classes') @sourcePaths
