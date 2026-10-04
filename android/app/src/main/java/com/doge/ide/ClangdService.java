@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.json.*;
 
 /** Minimal persistent clangd stdio/LSP bridge for completion, diagnostics and definition. */
@@ -19,6 +21,14 @@ final class ClangdService implements Closeable {
     private final Object lock = new Object();
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private static final long REQUEST_TIMEOUT_MS = 5000L;
+    private final Map<String, OpenDocument> documents = new LinkedHashMap<>();
+
+    private static final class OpenDocument {
+        final String uri;
+        String text;
+        int version = 1;
+        OpenDocument(String uri, String text) { this.uri = uri; this.text = text; }
+    }
 
     ClangdService(Context context) {
         Context app = context.getApplicationContext();
@@ -29,12 +39,19 @@ final class ClangdService implements Closeable {
         synchronized (lock) {
             File root = syncWorkspace(body);
             ensureStarted(root);
-            String path = body.optString("path", "main.c");
-            File file = new File(root, path);
+            syncOpenDocuments(body.optJSONArray("files"));
+            String path = body.optString("path", "main.c").replace('\\', '/');
+            if (!isSafeRelativePath(path)) throw new IOException("clangd 文件路径无效");
+            File file = safeChild(root, path);
             String uri = file.toURI().toString();
-            JSONObject didOpen = new JSONObject().put("jsonrpc", "2.0").put("method", "textDocument/didOpen")
-                    .put("params", new JSONObject().put("textDocument", new JSONObject().put("uri", uri).put("languageId", path.endsWith(".cpp") ? "cpp" : "c").put("version", 1).put("text", read(file))));
-            sendWithTimeout(didOpen);
+            if (!documents.containsKey(path)) {
+                String text = read(file);
+                String language = path.matches("(?i).+\\.(cc|cpp|cxx|hh|hpp|hxx)") ? "cpp" : "c";
+                JSONObject didOpen = new JSONObject().put("jsonrpc", "2.0").put("method", "textDocument/didOpen")
+                        .put("params", new JSONObject().put("textDocument", new JSONObject().put("uri", uri).put("languageId", language).put("version", 1).put("text", text)));
+                sendWithTimeout(didOpen);
+                documents.put(path, new OpenDocument(uri, text));
+            }
             JSONObject params = new JSONObject().put("textDocument", new JSONObject().put("uri", uri)).put("position", new JSONObject().put("line", Math.max(0, body.optInt("line", 0))).put("character", Math.max(0, body.optInt("column", 0))));
             JSONObject response = sendWithTimeout(new JSONObject().put("jsonrpc", "2.0").put("id", ++sequence).put("method", method).put("params", params));
             Object result = response == null ? null : response.opt("result");
@@ -45,6 +62,7 @@ final class ClangdService implements Closeable {
 
     private void ensureStarted(File root) throws Exception {
         if (process != null && RuntimeCompat.isAlive(process)) return;
+        destroyProcess();
         File clangd = new File(toolchain, "bin/clangd"); if (!clangd.isFile()) throw new IOException("资源包中没有 clangd"); clangd.setExecutable(true, false);
         ProcessBuilder builder = new ProcessBuilder(clangd.getAbsolutePath(), "--compile-commands-dir=" + root.getAbsolutePath(), "--background-index=false", "-j=1");
         builder.directory(root); builder.environment().put("HOME", filesDir.getAbsolutePath()); builder.environment().put("PATH", new File(toolchain, "bin").getAbsolutePath()); builder.environment().put("LD_LIBRARY_PATH", new File(toolchain, "lib").getAbsolutePath());
@@ -52,6 +70,35 @@ final class ClangdService implements Closeable {
         startStderrReader(process.getErrorStream());
         sendWithTimeout(new JSONObject().put("jsonrpc", "2.0").put("id", ++sequence).put("method", "initialize").put("params", new JSONObject().put("rootUri", root.toURI().toString()).put("capabilities", new JSONObject())));
         sendWithTimeout(new JSONObject().put("jsonrpc", "2.0").put("method", "initialized").put("params", new JSONObject()));
+    }
+
+    private void syncOpenDocuments(JSONArray files) throws Exception {
+        if (files == null) return;
+        Map<String, String> current = new LinkedHashMap<>();
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject file = files.optJSONObject(i);
+            if (file == null) continue;
+            String path = file.optString("path", "").replace('\\', '/');
+            if (isSafeRelativePath(path)) current.put(path, file.optString("code", ""));
+        }
+        java.util.Iterator<Map.Entry<String, OpenDocument>> iterator = documents.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, OpenDocument> entry = iterator.next();
+            OpenDocument document = entry.getValue();
+            String text = current.get(entry.getKey());
+            if (text == null) {
+                sendWithTimeout(new JSONObject().put("jsonrpc", "2.0").put("method", "textDocument/didClose")
+                        .put("params", new JSONObject().put("textDocument", new JSONObject().put("uri", document.uri))));
+                iterator.remove();
+            } else if (!text.equals(document.text)) {
+                int version = document.version + 1;
+                sendWithTimeout(new JSONObject().put("jsonrpc", "2.0").put("method", "textDocument/didChange")
+                        .put("params", new JSONObject().put("textDocument", new JSONObject().put("uri", document.uri).put("version", version))
+                                .put("contentChanges", new JSONArray().put(new JSONObject().put("text", text)))));
+                document.text = text;
+                document.version = version;
+            }
+        }
     }
 
     private JSONObject send(JSONObject message) throws Exception {
@@ -164,6 +211,6 @@ final class ClangdService implements Closeable {
     private static byte[] readFully(InputStream in,int n)throws IOException{byte[]b=new byte[n];int o=0,r;while(o<n&&(r=in.read(b,o,n-o))>0)o+=r;if(o<n)throw new EOFException();return b;}
     private static boolean isSafeRelativePath(String path) { return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.startsWith(".") && !path.contains("..") && !path.endsWith("/"); }
     private static File safeChild(File root, String path) throws IOException { File child = new File(root, path); if (!child.getCanonicalPath().startsWith(root.getCanonicalPath() + File.separator)) throw new IOException("clangd 路径无效"); return child; }
-    private void destroyProcess() { if (process != null) { RuntimeCompat.terminate(process); process = null; input = null; output = null; } }
+    private void destroyProcess() { documents.clear(); if (process != null) { RuntimeCompat.terminate(process); process = null; input = null; output = null; } }
     public void close(){synchronized(lock){destroyProcess();} ioExecutor.shutdownNow();}
 }

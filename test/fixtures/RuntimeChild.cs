@@ -81,6 +81,7 @@ class RuntimeChild {
                 offset += read;
             }
             string message = Encoding.UTF8.GetString(payload);
+            File.AppendAllText(Path.Combine(Path.GetDirectoryName(Environment.GetCommandLineArgs()[0]), "lsp-messages.jsonl"), message + "\n");
             Match id = Regex.Match(message, "\"id\":(\\d+)");
             if (!id.Success) continue;
             string result = "{}";

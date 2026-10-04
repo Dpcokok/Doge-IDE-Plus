@@ -172,6 +172,24 @@ public final class RuntimeRegression {
             check("LSP definition location array is preserved", definition instanceof JSONArray && ((JSONArray) definition).length() == 1);
             Object diagnostics = service.request(request, "textDocument/diagnostic");
             check("LSP diagnostic object remains unchanged", diagnostics instanceof JSONObject && "full".equals(((JSONObject) diagnostics).optString("kind")));
+            File log = new File(projectRoot, "toolchain/bin/lsp-messages.jsonl");
+            long opens = Files.readAllLines(log.toPath()).stream().filter(line -> line.contains("\"method\":\"textDocument/didOpen\"")).count();
+            check("an unchanged document is opened only once", opens == 1);
+            JSONObject main = new JSONObject().put("path", "main.c").put("code", "int updated; // 中文");
+            JSONObject header = new JSONObject().put("path", "header.h").put("code", "int oldHeader;");
+            request.put("files", new JSONArray().put(main).put(header));
+            service.request(request, "textDocument/completion");
+            check("editing sends versioned didChange with the updated text", Files.readAllLines(log.toPath()).stream().anyMatch(line -> line.contains("textDocument/didChange") && line.contains("\"version\":2") && line.contains("updated")));
+            request.put("path", "header.h");
+            service.request(request, "textDocument/completion");
+            header.put("code", "int newHeader;");
+            request.put("path", "main.c");
+            service.request(request, "textDocument/completion");
+            check("changes to other open project files are synchronized too", Files.readAllLines(log.toPath()).stream().anyMatch(line -> line.contains("textDocument/didChange") && line.contains("newHeader")));
+            new File(projectRoot, "workspace/clangd/header.h").delete();
+            request.put("files", new JSONArray().put(main));
+            service.request(request, "textDocument/completion");
+            check("removed open documents are closed", Files.readAllLines(log.toPath()).stream().anyMatch(line -> line.contains("textDocument/didClose") && line.contains("header.h")));
         } finally {
             service.close();
         }
