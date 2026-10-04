@@ -58,6 +58,13 @@ public class JSONObject {
         return new Gson().toJsonTree(x);
     }
     public JSONObject put(String key, Object x) { value.add(key, wrap(x)); return this; }
+    public Object opt(String key) {
+        JsonElement x = value.get(key);
+        if (x == null || x.isJsonNull()) return null;
+        if (x.isJsonObject()) return new JSONObject(x.getAsJsonObject());
+        if (x.isJsonArray()) return new JSONArray(x.getAsJsonArray());
+        return new Gson().fromJson(x, Object.class);
+    }
     public boolean has(String key) { return value.has(key); }
     public String optString(String key) { return optString(key, ""); }
     public String optString(String key, String fallback) {

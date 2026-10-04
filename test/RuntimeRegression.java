@@ -156,6 +156,25 @@ public final class RuntimeRegression {
         }
     }
 
+    private static void lspTests(Path child) throws Exception {
+        File projectRoot = new File(root, "lsp-test");
+        new File(projectRoot, "toolchain/bin").mkdirs();
+        Files.copy(child, new File(projectRoot, "toolchain/bin/clangd").toPath());
+        ClangdService service = new ClangdService(new Context(projectRoot));
+        JSONObject request = new JSONObject().put("path", "main.c")
+                .put("files", new JSONArray().put(new JSONObject().put("path", "main.c").put("code", "int main(){}")));
+        try {
+            Object completion = service.request(request, "textDocument/completion");
+            check("LSP completion array is preserved", completion instanceof JSONArray && ((JSONArray) completion).length() == 1);
+            Object definition = service.request(request, "textDocument/definition");
+            check("LSP definition location array is preserved", definition instanceof JSONArray && ((JSONArray) definition).length() == 1);
+            Object diagnostics = service.request(request, "textDocument/diagnostic");
+            check("LSP diagnostic object remains unchanged", diagnostics instanceof JSONObject && "full".equals(((JSONObject) diagnostics).optString("kind")));
+        } finally {
+            service.close();
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         root = new File(args[0], "runtime");
         root.mkdirs();
@@ -164,7 +183,8 @@ public final class RuntimeRegression {
         if (args[1].equals("compiler") || args[1].equals("all")) compilerTests(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("output") || args[1].equals("all")) outputTests(runner);
         if (args[1].equals("workspace") || args[1].equals("all")) workspaceTests();
-        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("lsp") || args[1].equals("all")) lspTests(Path.of(args[0], "RuntimeChild.exe"));
+        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }

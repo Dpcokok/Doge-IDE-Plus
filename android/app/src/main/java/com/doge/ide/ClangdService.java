@@ -25,7 +25,7 @@ final class ClangdService implements Closeable {
         filesDir = app.getFilesDir(); toolchain = new File(filesDir, "toolchain");
     }
 
-    JSONObject request(JSONObject body, String method) throws Exception {
+    Object request(JSONObject body, String method) throws Exception {
         synchronized (lock) {
             File root = syncWorkspace(body);
             ensureStarted(root);
@@ -37,7 +37,9 @@ final class ClangdService implements Closeable {
             sendWithTimeout(didOpen);
             JSONObject params = new JSONObject().put("textDocument", new JSONObject().put("uri", uri)).put("position", new JSONObject().put("line", Math.max(0, body.optInt("line", 0))).put("character", Math.max(0, body.optInt("column", 0))));
             JSONObject response = sendWithTimeout(new JSONObject().put("jsonrpc", "2.0").put("id", ++sequence).put("method", method).put("params", params));
-            return response == null ? new JSONObject() : response.optJSONObject("result") == null ? new JSONObject() : response.optJSONObject("result");
+            Object result = response == null ? null : response.opt("result");
+            // LSP 补全和定义都允许数组；保留协议中的对象/数组形状交给前端解析。
+            return result instanceof JSONObject || result instanceof JSONArray ? result : new JSONObject();
         }
     }
 

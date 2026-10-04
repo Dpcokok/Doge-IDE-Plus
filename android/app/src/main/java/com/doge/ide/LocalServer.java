@@ -333,7 +333,7 @@ final class LocalServer implements Closeable {
     private boolean respond(OutputStream out, Request req) throws IOException {
         if (req.path.startsWith("/api/v1/intel/")) {
             if (!"POST".equals(req.method)) return sendBytes(out, req, 405, "text/plain", "method not allowed".getBytes(StandardCharsets.UTF_8));
-            try { JSONObject body = new JSONObject(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8)); String method = req.path.endsWith("/completion") ? "textDocument/completion" : req.path.endsWith("/definition") ? "textDocument/definition" : req.path.endsWith("/diagnostics") ? "textDocument/diagnostic" : "textDocument/documentSymbol"; JSONObject result = clangd.request(body, method); return sendBytes(out, req, 200, "application/json; charset=utf-8", result.toString().getBytes(StandardCharsets.UTF_8)); }
+            try { JSONObject body = new JSONObject(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8)); String method = req.path.endsWith("/completion") ? "textDocument/completion" : req.path.endsWith("/definition") ? "textDocument/definition" : req.path.endsWith("/diagnostics") ? "textDocument/diagnostic" : "textDocument/documentSymbol"; Object result = clangd.request(body, method); return sendBytes(out, req, 200, "application/json; charset=utf-8", result.toString().getBytes(StandardCharsets.UTF_8)); }
             catch (Exception e) { return sendBytes(out, req, 503, "application/json; charset=utf-8", ("{\"error\":" + JSONObject.quote(e.getMessage()) + "}").getBytes(StandardCharsets.UTF_8)); }
         }
         if (TASKS_PATH.equals(req.path)) {
