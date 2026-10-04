@@ -75,6 +75,8 @@ final class PythonRunner {
 
     String execute(String requestJson, LocalCompiler.ProgressListener listener) {
         File work = null;
+        Process process = null;
+        Thread inputWriter = null;
         try {
             JSONObject request = new JSONObject(requestJson);
             JSONArray files = request.optJSONArray("files");
@@ -128,7 +130,7 @@ final class PythonRunner {
             env.remove("PYTHONPATH");
 
             listener.onUpdate("running", "", "");
-            Process process = builder.start();
+            process = builder.start();
             active = process;
             ByteArrayOutputStream stdout = new ByteArrayOutputStream();
             ByteArrayOutputStream stderr = new ByteArrayOutputStream();
@@ -136,10 +138,8 @@ final class PythonRunner {
             Thread errReader = drain(process.getErrorStream(), stderr, listener, false);
             OutputStream stdin = process.getOutputStream();
             String preset = request.optString("stdin", "");
-            try {
-                if (!preset.isEmpty()) { stdin.write(preset.getBytes(StandardCharsets.UTF_8)); stdin.flush(); }
-                if (interactive) activeStdin = stdin; else stdin.close();
-            } catch (IOException ignored) { /* 进程已退出 */ }
+            // 子进程可能永远不读 stdin。用独立线程投递预填内容，执行线程立即开始计时。
+            inputWriter = feedInput(process, preset, interactive);
             boolean finished = process.waitFor(timeout, TimeUnit.MILLISECONDS);
             if (!finished) process.destroyForcibly();
             process.waitFor(2, TimeUnit.SECONDS);
@@ -157,9 +157,36 @@ final class PythonRunner {
             return error("runtime_error", e.getMessage() == null ? e.toString() : e.getMessage());
         } finally {
             activeStdin = null;
+            if (process != null) {
+                // 超时、取消或线程中断都要结束子进程，让阻塞的管道写入退出。
+                if (process.isAlive()) process.destroyForcibly();
+                closeQuietly(process.getOutputStream());
+            }
+            if (inputWriter != null) {
+                try { inputWriter.join(1000); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            }
             active = null;
             deleteTree(work);
         }
+    }
+
+    private static Thread feedInput(Process process, String preset, boolean interactive) {
+        Thread writer = new Thread(() -> {
+            OutputStream stdin = process.getOutputStream();
+            try {
+                if (!preset.isEmpty()) {
+                    stdin.write(preset.getBytes(StandardCharsets.UTF_8));
+                    stdin.flush();
+                }
+                // 预填内容写完之后才允许交互输入，避免用户输入插到预填内容前面。
+                if (interactive && active == process && process.isAlive()) activeStdin = stdin;
+                else stdin.close();
+            } catch (IOException ignored) { /* 子进程已结束，管道关闭会释放写入线程。 */ }
+        }, "doge-python-stdin");
+        writer.setDaemon(true);
+        writer.start();
+        return writer;
     }
 
     private static Thread drain(InputStream input, ByteArrayOutputStream output, LocalCompiler.ProgressListener listener, boolean isStdout) {
