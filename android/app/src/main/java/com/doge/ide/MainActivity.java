@@ -753,6 +753,8 @@ public class MainActivity extends Activity {
                     File file = new File(staging, "bin/" + executable);
                     if (file.isFile() && !file.setExecutable(true, false)) throw new IOException("无法启用工具执行权限: " + executable);
                 }
+                RuntimeCompat.writeBytes(new File(staging, ".doge-runtime.json"),
+                        new JSONObject().put("generation", java.util.UUID.randomUUID().toString()).toString().getBytes(StandardCharsets.UTF_8));
             } catch (org.json.JSONException e) {
                 throw new IOException("manifest.json 无效", e);
             }

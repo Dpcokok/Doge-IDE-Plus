@@ -40,8 +40,13 @@ package com.doge.ide;
 import java.io.File;
 import android.content.Context;
 final class DependencyManager {
-    static DependencyManager get(Context context) { return new DependencyManager(); }
-    File resolvePackage(String name, String version) { return null; }
+    private final File root;
+    private DependencyManager(Context context) { root = new File(context.getFilesDir(), "packages"); }
+    static DependencyManager get(Context context) { return new DependencyManager(context); }
+    File resolvePackage(String name, String version) {
+        File found = new File(root, name + "-" + version);
+        return found.isDirectory() ? found : null;
+    }
 }
 '@
     $sources['NativeWasmRunner.java'] = @'

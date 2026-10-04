@@ -12,12 +12,15 @@ class RuntimeChild {
         string executable = Path.GetFileName(Environment.GetCommandLineArgs()[0]);
         if (executable.StartsWith("clangd")) return LanguageServer();
         if (executable.StartsWith("clang")) {
+            File.AppendAllText(Path.Combine(Path.GetDirectoryName(Environment.GetCommandLineArgs()[0]), "compile-count.txt"), "compile\n");
             string source = args[Array.IndexOf(args, "-c") + 1];
             string target = args[Array.IndexOf(args, "-o") + 1];
             string code = File.ReadAllText(source);
             foreach (Match include in Regex.Matches(code, "#include\\s*\"([^\"]+)\"")) {
                 string name = include.Groups[1].Value;
-                if (!File.Exists(Path.Combine(Path.GetDirectoryName(source), name)) && !File.Exists(Path.Combine(Environment.CurrentDirectory, name))) {
+                bool found = File.Exists(Path.Combine(Path.GetDirectoryName(source), name)) || File.Exists(Path.Combine(Environment.CurrentDirectory, name));
+                foreach (string arg in args) if (arg.StartsWith("-I") && File.Exists(Path.Combine(arg.Substring(2), name))) found = true;
+                if (!found) {
                     Console.Error.WriteLine(source + ":1:10: error: missing header " + name);
                     return 1;
                 }

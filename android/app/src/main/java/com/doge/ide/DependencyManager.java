@@ -63,7 +63,7 @@ final class DependencyManager {
             }
             if (total + 16L * 1024 * 1024 > available) throw new IOException("设备剩余空间不足");
             String sha256 = hex(digest.digest());
-            RuntimeCompat.writeBytes(new File(staging, ".doge-package.json"), new JSONObject().put("name", name).put("version", version).put("sha256", sha256).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            RuntimeCompat.writeBytes(new File(staging, ".doge-package.json"), new JSONObject().put("name", name).put("version", version).put("sha256", sha256).put("generation", java.util.UUID.randomUUID().toString()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             if (destination.exists() && !destination.renameTo(backup)) throw new IOException("无法备份现有依赖版本");
             if (!staging.renameTo(destination)) throw new IOException("无法安装依赖");
             JSONArray items = readRegistry(); removeEntry(items, name, version);

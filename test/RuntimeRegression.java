@@ -216,6 +216,42 @@ public final class RuntimeRegression {
         }
     }
 
+    private static void cacheTests(Path child) throws Exception {
+        File projectRoot = new File(root, "cache-test");
+        String manifest = "{\"clang\":\"bin/clang\",\"sysroot\":\"wasi-sysroot\",\"version\":\"1\"}";
+        write(projectRoot, "toolchain/manifest.json", manifest);
+        write(projectRoot, "toolchain/.doge-runtime.json", "{\"generation\":\"A\"}");
+        new File(projectRoot, "toolchain/bin").mkdirs();
+        new File(projectRoot, "toolchain/wasi-sysroot").mkdirs();
+        for (String binary : new String[] { "clang", "clang++", "wasm-ld" }) Files.copy(child, new File(projectRoot, "toolchain/bin/" + binary).toPath());
+        LocalCompiler compiler = new LocalCompiler(new Context(projectRoot));
+        JSONObject request = new JSONObject().put("language", "c").put("entry", "main.c")
+                .put("files", new JSONArray().put(new JSONObject().put("path", "main.c").put("code", "int main(){return 0;}")));
+        File count = new File(projectRoot, "toolchain/bin/compile-count.txt");
+        check("initial request compiles successfully", "success".equals(new JSONObject(compiler.execute(request.toString())).optString("status")));
+        compiler.execute(request.toString());
+        check("unchanged runtime/request reuses object cache", Files.readAllLines(count.toPath()).size() == 1);
+        write(projectRoot, "toolchain/manifest.json", manifest.replace("\"version\":\"1\"", "\"version\":\"2\""));
+        compiler.execute(request.toString());
+        check("changed toolchain manifest forces recompilation", Files.readAllLines(count.toPath()).size() == 2);
+        write(projectRoot, "toolchain/.doge-runtime.json", "{\"generation\":\"B\"}");
+        compiler.execute(request.toString());
+        check("reimporting the same runtime invalidates its objects", Files.readAllLines(count.toPath()).size() == 3);
+
+        write(projectRoot, "packages/dep-1/include/dep.h", "int dependency();");
+        write(projectRoot, "packages/dep-1/.doge-package.json", "{\"generation\":\"first\",\"sha256\":\"old\"}");
+        request.put("build", new JSONObject().put("dependencies", new JSONArray().put(new JSONObject().put("name", "dep").put("version", "1"))));
+        request.put("files", new JSONArray().put(new JSONObject().put("path", "main.c").put("code", "#include \"dep.h\"\nint main(){return 0;}")));
+        compiler.execute(request.toString());
+        int before = Files.readAllLines(count.toPath()).size();
+        compiler.execute(request.toString());
+        check("unchanged dependency reuses object cache", Files.readAllLines(count.toPath()).size() == before);
+        write(projectRoot, "packages/dep-1/include/dep.h", "int changed_dependency();");
+        write(projectRoot, "packages/dep-1/.doge-package.json", "{\"generation\":\"second\",\"sha256\":\"new\"}");
+        compiler.execute(request.toString());
+        check("same dependency coordinate with new contents recompiles", Files.readAllLines(count.toPath()).size() == before + 1);
+    }
+
     public static void main(String[] args) throws Exception {
         root = new File(args[0], "runtime");
         root.mkdirs();
@@ -226,7 +262,8 @@ public final class RuntimeRegression {
         if (args[1].equals("workspace") || args[1].equals("all")) workspaceTests();
         if (args[1].equals("lsp") || args[1].equals("all")) lspTests(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("compat")) compatibilityTests(runner, Path.of(args[0], "RuntimeChild.exe"));
-        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("cache") || args[1].equals("all")) cacheTests(Path.of(args[0], "RuntimeChild.exe"));
+        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }

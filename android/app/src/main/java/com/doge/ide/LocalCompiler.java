@@ -72,7 +72,7 @@ final class LocalCompiler {
                 File candidate = new File(toolchain, "bin/" + executable);
                 if (candidate.isFile()) candidate.setExecutable(true, false);
             }
-            String fingerprint = cacheFingerprint(request);
+            String fingerprint = cacheFingerprint(request, toolchain);
             File work = new File(new File(filesDir, "runs"), Long.toHexString(System.nanoTime()) + "-" + Thread.currentThread().getId());
             if (!work.isDirectory() && !work.mkdirs()) return error("runtime_error", "无法创建编译目录");
             File wasm = new File(work, "main.wasm");
@@ -269,11 +269,39 @@ final class LocalCompiler {
         return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.contains("..") ? path : null;
     }
 
-    private static String cacheFingerprint(JSONObject request) throws Exception {
-        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(request.toString().getBytes(StandardCharsets.UTF_8));
+    private String cacheFingerprint(JSONObject request, File toolchain) throws Exception {
+        java.security.MessageDigest hash = java.security.MessageDigest.getInstance("SHA-256");
+        fingerprintField(hash, "compiler-cache-v2".getBytes(StandardCharsets.UTF_8));
+        fingerprintField(hash, request.toString().getBytes(StandardCharsets.UTF_8));
+        fingerprintField(hash, RuntimeCompat.readBytes(new File(toolchain, "manifest.json")));
+        File generation = new File(toolchain, ".doge-runtime.json");
+        fingerprintField(hash, generation.isFile() ? RuntimeCompat.readBytes(generation) : new byte[0]);
+        JSONObject build = request.optJSONObject("build");
+        JSONArray requested = build == null ? null : build.optJSONArray("dependencies");
+        if (requested != null) for (int i = 0; i < requested.length(); i++) {
+            JSONObject dependency = requested.optJSONObject(i);
+            String name = dependency == null ? "" : dependency.optString("name", "");
+            String version = dependency == null ? "" : dependency.optString("version", "");
+            if (name.isEmpty() || version.isEmpty()) {
+                String[] coordinate = requested.optString(i, "").split("@", 2);
+                if (coordinate.length == 2) { name = coordinate[0]; version = coordinate[1]; }
+            }
+            File packageRoot = dependencies.resolvePackage(name, version);
+            if (packageRoot == null) throw new IOException("依赖未安装或 registry 无效: " + name + "@" + version);
+            File metadata = new File(packageRoot, ".doge-package.json");
+            // 无法识别安装内容时保守地不复用缓存，编译本身仍可进行。
+            fingerprintField(hash, metadata.isFile() ? RuntimeCompat.readBytes(metadata)
+                    : java.util.UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8));
+        }
+        byte[] digest = hash.digest();
         StringBuilder value = new StringBuilder();
         for (byte b : digest) value.append(String.format(java.util.Locale.ROOT, "%02x", b & 0xff));
         return value.toString();
+    }
+
+    private static void fingerprintField(java.security.MessageDigest hash, byte[] bytes) {
+        for (int shift = 24; shift >= 0; shift -= 8) hash.update((byte) (bytes.length >>> shift));
+        hash.update(bytes);
     }
 
     private void trimBuildCache() {
