@@ -4,6 +4,7 @@ import android.content.Context;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.File;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -134,6 +135,27 @@ public final class RuntimeRegression {
         }
     }
 
+    private static void workspaceTests() throws Exception {
+        File projectRoot = new File(root, "workspace-test");
+        projectRoot.mkdirs();
+        ClangdService service = new ClangdService(new Context(projectRoot));
+        Method sync = ClangdService.class.getDeclaredMethod("syncWorkspace", JSONObject.class);
+        sync.setAccessible(true);
+        try {
+            JSONObject source = new JSONObject().put("path", "main.c").put("code", "#include \"old.h\"");
+            JSONObject header = new JSONObject().put("path", "old.h").put("code", "int old;");
+            File workspace = (File) sync.invoke(service, new JSONObject().put("files", new JSONArray().put(source).put(header)));
+            sync.invoke(service, new JSONObject().put("files", new JSONArray().put(source)));
+            check("deleted project header is removed from clangd workspace", !new File(workspace, "old.h").exists());
+            JSONObject next = new JSONObject().put("path", "src/next.cpp").put("code", "int main(){}");
+            sync.invoke(service, new JSONObject().put("files", new JSONArray().put(next)));
+            check("files from the previous project do not remain visible", !new File(workspace, "main.c").exists());
+            check("current project and compilation database remain available", new File(workspace, "src/next.cpp").isFile() && new File(workspace, "compile_commands.json").isFile());
+        } finally {
+            service.close();
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         root = new File(args[0], "runtime");
         root.mkdirs();
@@ -141,7 +163,8 @@ public final class RuntimeRegression {
         if (args[1].equals("stdin") || args[1].equals("all")) stdinTests(runner);
         if (args[1].equals("compiler") || args[1].equals("all")) compilerTests(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("output") || args[1].equals("all")) outputTests(runner);
-        if (!args[1].equals("stdin") && !args[1].equals("compiler") && !args[1].equals("output") && !args[1].equals("all")) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("workspace") || args[1].equals("all")) workspaceTests();
+        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }

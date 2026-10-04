@@ -86,6 +86,15 @@ final class ClangdService implements Closeable {
     }
     private File syncWorkspace(JSONObject body) throws Exception {
         File root = new File(filesDir, "workspace/clangd"); if (!root.isDirectory() && !root.mkdirs()) throw new IOException("无法创建 clangd 工作区"); JSONArray files = body.optJSONArray("files");
+        java.util.Set<String> currentPaths = new java.util.HashSet<>();
+        if (files != null) for (int i = 0; i < files.length(); i++) {
+            JSONObject file = files.optJSONObject(i);
+            if (file == null) continue;
+            String path = file.optString("path", "").replace('\\', '/');
+            if (isSafeRelativePath(path)) currentPaths.add(path);
+        }
+        // 删除的头文件也会影响已有 AST；清理后重启，避免缓存仍解析到旧文件。
+        if (removeStaleFiles(root, root, currentPaths)) destroyProcess();
         if (files != null) for (int i=0;i<files.length();i++) { JSONObject f=files.optJSONObject(i); if(f==null)continue; String p=f.optString("path","").replace('\\','/'); if(!isSafeRelativePath(p))continue; File target=safeChild(root,p); if(target.getParentFile()!=null && !target.getParentFile().isDirectory() && !target.getParentFile().mkdirs()) throw new IOException("无法创建 clangd 文件目录"); java.nio.file.Files.write(target.toPath(),f.optString("code","").getBytes(StandardCharsets.UTF_8)); }
         // 头文件查找与真实编译一致：源文件所在目录（clang 对 "…" 默认就查）、项目根、构建配置 include_paths；宏定义同样带上
         JSONObject build = body.optJSONObject("build");
@@ -124,6 +133,29 @@ final class ClangdService implements Closeable {
             if (!old.isEmpty()) destroyProcess();
         }
         return root;
+    }
+    private static boolean removeStaleFiles(File root, File directory, java.util.Set<String> currentPaths) throws IOException {
+        File[] children = directory.listFiles();
+        if (children == null) return false;
+        boolean changed = false;
+        String rootPrefix = root.getCanonicalPath() + File.separator;
+        for (File child : children) {
+            String path = child.getAbsolutePath().substring(root.getAbsolutePath().length() + 1).replace(File.separatorChar, '/');
+            if ("compile_commands.json".equals(path) || path.startsWith(".")) continue;
+            // 对指向工作区外的链接只删除链接本身，不递归访问其目标。
+            if (!child.getCanonicalPath().startsWith(rootPrefix)) {
+                if (!child.delete()) throw new IOException("无法清理 clangd 链接: " + path);
+                changed = true;
+            } else if (child.isDirectory()) {
+                changed |= removeStaleFiles(root, child, currentPaths);
+                File[] remaining = child.listFiles();
+                if (remaining != null && remaining.length == 0) child.delete();
+            } else if (!currentPaths.contains(path)) {
+                if (!child.delete()) throw new IOException("无法清理 clangd 文件: " + path);
+                changed = true;
+            }
+        }
+        return changed;
     }
     private static String read(File f) throws IOException { return new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); }
     private static String readLine(InputStream in) throws IOException { StringBuilder s=new StringBuilder(); int c; while((c=in.read())!=-1){if(c=='\n')break;if(c!='\r')s.append((char)c);} return c==-1&&s.length()==0?null:s.toString(); }
