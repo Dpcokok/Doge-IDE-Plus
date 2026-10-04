@@ -111,13 +111,37 @@ public final class RuntimeRegression {
         }
     }
 
+    private static void outputTests(PythonRunner runner) throws Exception {
+        TaskRegistry tasks = new TaskRegistry(new LocalCompiler(new Context(root)), runner);
+        try {
+            JSONObject result = new JSONObject(tasks.runBlocking(pythonRequest("main.py", 3000, "").toString(), 5000));
+            check("direct task response includes streamed stdout", "HELLO".equals(result.optString("stdout").trim()));
+            result = new JSONObject(tasks.runBlocking(pythonRequest("error.py", 3000, "").toString(), 5000));
+            check("direct error response includes streamed stderr", "runtime_error".equals(result.optString("status")) && "PROBLEM".equals(result.optString("stderr").trim()));
+            String id = tasks.submit(pythonRequest("slow.py", 1000, "").toString());
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            JSONObject task;
+            do {
+                task = tasks.get(id);
+                if ("finished".equals(task.optString("phase"))) break;
+                Thread.sleep(50);
+            } while (System.nanoTime() < deadline);
+            check("timed out task output is present exactly once", "timeout".equals(task.optString("status")) && "START".equals(task.optString("stdout").trim()));
+            JSONObject finalResult = new JSONObject(task.optString("result"));
+            check("stored result agrees with streamed output", task.optString("stdout").equals(finalResult.optString("stdout")));
+        } finally {
+            tasks.close();
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         root = new File(args[0], "runtime");
         root.mkdirs();
         PythonRunner runner = pythonRunner(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("stdin") || args[1].equals("all")) stdinTests(runner);
         if (args[1].equals("compiler") || args[1].equals("all")) compilerTests(Path.of(args[0], "RuntimeChild.exe"));
-        if (!args[1].equals("stdin") && !args[1].equals("compiler") && !args[1].equals("all")) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("output") || args[1].equals("all")) outputTests(runner);
+        if (!args[1].equals("stdin") && !args[1].equals("compiler") && !args[1].equals("output") && !args[1].equals("all")) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }

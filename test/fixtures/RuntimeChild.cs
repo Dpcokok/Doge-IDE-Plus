@@ -40,6 +40,9 @@ class RuntimeChild {
                 Console.WriteLine("LINE:" + Console.ReadLine());
                 Console.Out.Flush();
             }
+        } else if (entry == "error.py") {
+            Console.Error.WriteLine("PROBLEM");
+            return 3;
         } else {
             Console.WriteLine("HELLO");
         }

@@ -151,8 +151,8 @@ final class PythonRunner {
             if (!finished) return result("timeout", out, err, -1);
             int code = process.exitValue();
             String status = code == 0 ? "success" : code == SYNTAX_EXIT ? "compile_error" : "runtime_error";
-            // 已经通过 listener 增量推送过输出，TaskRegistry 会再追加 final 输出；这里只返回状态
-            return result(status, "", "", code);
+            // 最终结果包含完整输出，注册表据 output_complete 替换增量缓冲，避免重复追加。
+            return result(status, out, err, code);
         } catch (Exception e) {
             return error("runtime_error", e.getMessage() == null ? e.toString() : e.getMessage());
         } finally {
@@ -249,7 +249,7 @@ final class PythonRunner {
     }
 
     private static String result(String status, String stdout, String stderr, int exitCode) {
-        try { return new JSONObject().put("status", status).put("stdout", stdout).put("stderr", stderr).put("exit_code", exitCode).toString(); }
+        try { return new JSONObject().put("status", status).put("stdout", stdout).put("stderr", stderr).put("exit_code", exitCode).put("output_complete", true).toString(); }
         catch (Exception e) { return "{\"status\":\"runtime_error\"}"; }
     }
 

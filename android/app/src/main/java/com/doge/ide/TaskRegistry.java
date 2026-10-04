@@ -126,9 +126,12 @@ final class TaskRegistry {
                 task.status = value.optString("status", "runtime_error");
                 String finalStdout = value.optString("stdout", "");
                 String finalStderr = value.optString("stderr", value.optString("message", ""));
-                task.stdout = appendBounded(task.stdout, finalStdout);
-                task.stderr = appendBounded(task.stderr, finalStderr);
-                task.result = result;
+                boolean completeOutput = value.optBoolean("output_complete", false);
+                task.stdout = appendBounded(completeOutput ? "" : task.stdout, finalStdout);
+                task.stderr = appendBounded(completeOutput ? "" : task.stderr, finalStderr);
+                // 直连接口和任务快照使用同一份最终输出，保留其他执行元数据。
+                value.put("stdout", task.stdout).put("stderr", task.stderr);
+                task.result = value.toString();
             } catch (Exception e) { task.finish("runtime_error", e.toString()); return; }
             task.phase = "finished";
             task.notifyAll();
