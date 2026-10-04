@@ -107,7 +107,7 @@ final class ClangdService implements Closeable {
         if (!message.has("id")) return null;
         while (true) {
             String line; int length = -1;
-            while ((line = readLine(input)) != null && !line.isEmpty()) if (line.toLowerCase().startsWith("content-length:")) length = Integer.parseInt(line.substring(15).trim());
+            while ((line = readLine(input)) != null && !line.isEmpty()) if (line.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:")) length = Integer.parseInt(line.substring(15).trim());
             if (length < 0) throw new IOException("clangd 响应无效");
             byte[] payload = readFully(input, length); JSONObject value = new JSONObject(new String(payload, StandardCharsets.UTF_8));
             if (value.optInt("id", -1) == message.optInt("id", -2)) return value;
