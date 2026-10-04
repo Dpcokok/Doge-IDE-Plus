@@ -3,8 +3,8 @@
 // Then open http://localhost:8787 in browser
 
 import { createServer } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { join, extname, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -34,6 +34,25 @@ const MIME = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
 };
+
+// Only the frontend entry and web assets are public. Canonical paths also keep
+// symlinks and encoded separators from exposing source files or private data.
+function assetPath(rawUrl) {
+  try {
+    const pathname = decodeURIComponent(new URL(rawUrl, 'http://127.0.0.1').pathname);
+    if (pathname === '/' || pathname === '/doge-ide.html') return join(__dirname, 'doge-ide.html');
+    if (!pathname.startsWith('/web/') || pathname.includes('\\') || pathname.includes('\0') || pathname.split('/').includes('..')) return null;
+    const candidate = resolve(__dirname, '.' + pathname);
+    if (!existsSync(candidate)) return null;
+    const webRoot = realpathSync(join(__dirname, 'web'));
+    const actual = realpathSync(candidate);
+    const inside = relative(webRoot, actual);
+    if (inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside)) return null;
+    return actual;
+  } catch {
+    return null;
+  }
+}
 
 const server = createServer(async (req, res) => {
   // CORS headers for local dev
@@ -74,8 +93,8 @@ const server = createServer(async (req, res) => {
   }
 
   // Serve static files
-  let filePath = join(__dirname, req.url === '/' ? 'doge-ide.html' : req.url);
-  if (!existsSync(filePath)) {
+  const filePath = assetPath(req.url);
+  if (!filePath || !existsSync(filePath)) {
     res.writeHead(404);
     res.end('Not found');
     return;
@@ -87,7 +106,7 @@ const server = createServer(async (req, res) => {
   res.end(content);
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`
 ╔══════════════════════════════════════════╗
 ║          🐕 Doge IDE is running!         ║

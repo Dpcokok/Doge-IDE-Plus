@@ -39,6 +39,23 @@ MIME = {
 }
 
 
+def asset_path(raw_url):
+    """Expose only the frontend entry and files contained in the web directory."""
+    try:
+        path = urllib.parse.unquote(urllib.parse.urlsplit(raw_url).path, errors="strict")
+        if path in ("/", "/doge-ide.html"):
+            return os.path.join(DIR, "doge-ide.html")
+        if not path.startswith("/web/") or "\\" in path or "\0" in path or ".." in path.split("/"):
+            return None
+        web_root = os.path.realpath(os.path.join(DIR, "web"))
+        candidate = os.path.realpath(os.path.join(DIR, path.lstrip("/")))
+        if os.path.commonpath((web_root, candidate)) != web_root:
+            return None
+        return candidate
+    except (ValueError, UnicodeError, OSError):
+        return None
+
+
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(204)
@@ -80,16 +97,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_GET(self):
-        path = self.path.split("?")[0]
-        if path == "/":
-            path = "/doge-ide.html"
-        file_path = os.path.join(DIR, path.lstrip("/"))
-        if not os.path.isfile(file_path):
+        file_path = asset_path(self.path)
+        if not file_path or not os.path.isfile(file_path):
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b"Not found")
             return
-        ext = os.path.splitext(path)[1]
+        ext = os.path.splitext(file_path)[1]
         mime = MIME.get(ext, "application/octet-stream")
         with open(file_path, "rb") as f:
             data = f.read()
