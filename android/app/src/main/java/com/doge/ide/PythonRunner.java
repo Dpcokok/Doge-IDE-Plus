@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.concurrent.TimeUnit;
 
 /** Runs a Python project with the imported runtime (files/python) in a child process. */
@@ -61,7 +60,7 @@ final class PythonRunner {
 
     static void cancelActive() {
         Process p = active;
-        if (p != null) p.destroyForcibly();
+        if (p != null) RuntimeCompat.terminate(p);
     }
 
     /** 运行中输入：写入当前 Python 进程的 stdin。text 为 null 表示关闭输入（EOF）。 */
@@ -91,7 +90,7 @@ final class PythonRunner {
             File runtime = new File(filesDir, "python");
             File manifest = new File(runtime, "manifest.json");
             if (!manifest.isFile()) return error("runtime_not_ready", "请先导入 Python 运行库");
-            JSONObject meta = new JSONObject(new String(Files.readAllBytes(manifest.toPath()), StandardCharsets.UTF_8));
+            JSONObject meta = new JSONObject(new String(RuntimeCompat.readBytes(manifest), StandardCharsets.UTF_8));
             File python = safeChild(runtime, meta.optString("python", "bin/doge-python"));
             File home = safeChild(runtime, meta.optString("home", "prefix"));
             File lib = safeChild(runtime, meta.optString("lib", "prefix/lib"));
@@ -111,11 +110,11 @@ final class PythonRunner {
                 File target = safeChild(work, relative);
                 File parent = target.getParentFile();
                 if (parent != null) parent.mkdirs();
-                Files.write(target.toPath(), file.optString("code", "").getBytes(StandardCharsets.UTF_8));
+                RuntimeCompat.writeBytes(target, file.optString("code", "").getBytes(StandardCharsets.UTF_8));
             }
             if (!entryFound || !entry.toLowerCase(java.util.Locale.ROOT).endsWith(".py")) return error("invalid_request", "入口文件不存在: " + entry);
             File boot = new File(work, ".doge_boot.py");
-            Files.write(boot.toPath(), BOOT.getBytes(StandardCharsets.UTF_8));
+            RuntimeCompat.writeBytes(boot, BOOT.getBytes(StandardCharsets.UTF_8));
 
             ProcessBuilder builder = new ProcessBuilder(python.getAbsolutePath(), "-u", "-B", boot.getAbsolutePath(), entry);
             builder.directory(work);
@@ -142,9 +141,9 @@ final class PythonRunner {
             String preset = request.optString("stdin", "");
             // 子进程可能永远不读 stdin。用独立线程投递预填内容，执行线程立即开始计时。
             inputWriter = feedInput(process, preset, interactive);
-            boolean finished = process.waitFor(timeout, TimeUnit.MILLISECONDS);
-            if (!finished) process.destroyForcibly();
-            process.waitFor(2, TimeUnit.SECONDS);
+            boolean finished = RuntimeCompat.waitFor(process, timeout, TimeUnit.MILLISECONDS);
+            if (!finished) RuntimeCompat.terminate(process);
+            RuntimeCompat.waitFor(process, 2, TimeUnit.SECONDS);
             outReader.join(1000); errReader.join(1000);
             activeStdin = null;
             active = null;
@@ -161,7 +160,7 @@ final class PythonRunner {
             activeStdin = null;
             if (process != null) {
                 // 超时、取消或线程中断都要结束子进程，让阻塞的管道写入退出。
-                if (process.isAlive()) process.destroyForcibly();
+                if (RuntimeCompat.isAlive(process)) RuntimeCompat.terminate(process);
                 closeQuietly(process.getOutputStream());
             }
             if (inputWriter != null) {
@@ -182,7 +181,7 @@ final class PythonRunner {
                     stdin.flush();
                 }
                 // 预填内容写完之后才允许交互输入，避免用户输入插到预填内容前面。
-                if (interactive && active == process && process.isAlive()) activeStdin = stdin;
+                if (interactive && active == process && RuntimeCompat.isAlive(process)) activeStdin = stdin;
                 else stdin.close();
             } catch (IOException ignored) { /* 子进程已结束，管道关闭会释放写入线程。 */ }
         }, "doge-python-stdin");

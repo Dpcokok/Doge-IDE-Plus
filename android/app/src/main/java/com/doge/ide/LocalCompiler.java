@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.Set;
@@ -34,7 +33,7 @@ final class LocalCompiler {
     }
 
     static void cancelActive() {
-        for (Process process : ACTIVE_PROCESSES) process.destroyForcibly();
+        for (Process process : ACTIVE_PROCESSES) RuntimeCompat.terminate(process);
         NativeWasmRunner.cancel();
     }
 
@@ -63,7 +62,7 @@ final class LocalCompiler {
             if (!manifest.isFile()) {
                 return error("runtime_not_ready", "请先导入 C/C++ 资源包");
             }
-            JSONObject meta = new JSONObject(new String(Files.readAllBytes(manifest.toPath()), StandardCharsets.UTF_8));
+            JSONObject meta = new JSONObject(new String(RuntimeCompat.readBytes(manifest), StandardCharsets.UTF_8));
             String clangRelative = meta.optString("clang", "bin/clang");
             String sysrootRelative = meta.optString("sysroot", "wasi-sysroot");
             File clang = safeChild(toolchain, clangRelative);
@@ -77,7 +76,7 @@ final class LocalCompiler {
             File work = new File(new File(filesDir, "runs"), Long.toHexString(System.nanoTime()) + "-" + Thread.currentThread().getId());
             if (!work.isDirectory() && !work.mkdirs()) return error("runtime_error", "无法创建编译目录");
             File wasm = new File(work, "main.wasm");
-            Files.deleteIfExists(wasm.toPath());
+            RuntimeCompat.deleteIfExists(wasm);
             writeCompileCommands(request, files, build, toolchain, sysroot);
 
             String target = "wasm32-wasip1";
@@ -98,7 +97,7 @@ final class LocalCompiler {
                 File projectFile = safeChild(work, relative);
                 File projectParent = projectFile.getParentFile();
                 if (projectParent != null) projectParent.mkdirs();
-                Files.write(projectFile.toPath(), file.optString("code", "").getBytes(StandardCharsets.UTF_8));
+                RuntimeCompat.writeBytes(projectFile, file.optString("code", "").getBytes(StandardCharsets.UTF_8));
             }
             if (!entryFound) return error("invalid_request", "入口文件不存在: " + entry);
 
@@ -117,9 +116,9 @@ final class LocalCompiler {
                 File cachedObject = new File(new File(filesDir, "build-cache/" + fingerprint), relative + ".o");
                 File objectParent = object.getParentFile();
                 if (objectParent != null) objectParent.mkdirs();
-                Files.deleteIfExists(object.toPath());
+                RuntimeCompat.deleteIfExists(object);
                 if (cachedObject.isFile()) {
-                    Files.copy(cachedObject.toPath(), object.toPath());
+                    RuntimeCompat.copyFile(cachedObject, object);
                     objects.add(object);
                     continue;
                 }
@@ -140,7 +139,7 @@ final class LocalCompiler {
                 objects.add(object);
                 File cacheParent = cachedObject.getParentFile();
                 if (cacheParent != null) cacheParent.mkdirs();
-                Files.copy(object.toPath(), cachedObject.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                RuntimeCompat.copyFile(object, cachedObject, true);
             }
             if (objects.isEmpty()) return error("invalid_request", "项目中没有 C/C++ 源文件");
 
@@ -169,7 +168,7 @@ final class LocalCompiler {
             compileError.append(linked.stderr);
             if (linked.exitCode != 0 || !wasm.isFile()) return result("compile_error", "", compileError.toString(), linked.exitCode);
             listener.onUpdate("running", "", compileError.toString());
-            String run = NativeWasmRunner.run(Files.readAllBytes(wasm.toPath()), stdin.getBytes(StandardCharsets.UTF_8), remainingMillis(deadlineNanos));
+            String run = NativeWasmRunner.run(RuntimeCompat.readBytes(wasm), stdin.getBytes(StandardCharsets.UTF_8), remainingMillis(deadlineNanos));
             trimBuildCache();
             JSONObject response = new JSONObject(run);
             response.put("compile_stderr", compileError.toString());
@@ -195,7 +194,7 @@ final class LocalCompiler {
                 String lower = path.toLowerCase(java.util.Locale.ROOT);
                 if (!(lower.endsWith(".c") || lower.endsWith(".cc") || lower.endsWith(".cpp") || lower.endsWith(".cxx"))) continue;
                 File source = safeChild(root, path); File parent = source.getParentFile(); if (parent != null) parent.mkdirs();
-                Files.write(source.toPath(), file.optString("code", "").getBytes(StandardCharsets.UTF_8));
+                RuntimeCompat.writeBytes(source, file.optString("code", "").getBytes(StandardCharsets.UTF_8));
                 JSONArray args = new JSONArray().put(new File(toolchain, "bin/" + (lower.endsWith(".c") ? "clang" : "clang++")).getAbsolutePath())
                         .put("--target=wasm32-wasip1").put("--sysroot=" + sysroot.getAbsolutePath()).put("-O" + (build == null ? "2" : build.optString("optimization", "2")))
                         .put("-std=" + (lower.endsWith(".c") ? "c17" : "c++20")).put("-fno-exceptions").put("-fno-rtti")
@@ -206,7 +205,7 @@ final class LocalCompiler {
                 if (includes != null) for (int p = 0; p < includes.length(); p++) args.put("-I" + new File(root, includes.optString(p)).getAbsolutePath());
                 commands.put(new JSONObject().put("directory", root.getAbsolutePath()).put("file", source.getAbsolutePath()).put("arguments", args));
             }
-            Files.write(new File(root, "compile_commands.json").toPath(), commands.toString(2).getBytes(StandardCharsets.UTF_8));
+            RuntimeCompat.writeBytes(new File(root, "compile_commands.json"), commands.toString(2).getBytes(StandardCharsets.UTF_8));
         } catch (Exception ignored) { }
     }
 
@@ -320,8 +319,8 @@ final class LocalCompiler {
         ByteArrayOutputStream stderr = new ByteArrayOutputStream();
         Thread outReader = drain(process.getInputStream(), stdout, listener, true);
         Thread errReader = drain(process.getErrorStream(), stderr, listener, false);
-        boolean finished = process.waitFor(timeout, TimeUnit.MILLISECONDS);
-        if (!finished) process.destroyForcibly();
+        boolean finished = RuntimeCompat.waitFor(process, timeout, TimeUnit.MILLISECONDS);
+        if (!finished) RuntimeCompat.terminate(process);
         outReader.join(1000); errReader.join(1000);
         if (outReader.isAlive() || errReader.isAlive()) {
             // 子进程被杀后流未关闭时，主动关流让读取线程退出，避免线程滞留累积
@@ -329,7 +328,7 @@ final class LocalCompiler {
             closeQuietly(process.getErrorStream());
         }
         ACTIVE_PROCESSES.remove(process);
-        return new ProcessResult(finished, finished ? process.exitValue() : -1, stderr.toString(StandardCharsets.UTF_8));
+        return new ProcessResult(finished, finished ? process.exitValue() : -1, stderr.toString(StandardCharsets.UTF_8.name()));
     }
 
     private static int remainingMillis(long deadlineNanos) throws TimeoutException {

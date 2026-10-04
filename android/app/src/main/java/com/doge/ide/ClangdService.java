@@ -44,7 +44,7 @@ final class ClangdService implements Closeable {
     }
 
     private void ensureStarted(File root) throws Exception {
-        if (process != null && process.isAlive()) return;
+        if (process != null && RuntimeCompat.isAlive(process)) return;
         File clangd = new File(toolchain, "bin/clangd"); if (!clangd.isFile()) throw new IOException("资源包中没有 clangd"); clangd.setExecutable(true, false);
         ProcessBuilder builder = new ProcessBuilder(clangd.getAbsolutePath(), "--compile-commands-dir=" + root.getAbsolutePath(), "--background-index=false", "-j=1");
         builder.directory(root); builder.environment().put("HOME", filesDir.getAbsolutePath()); builder.environment().put("PATH", new File(toolchain, "bin").getAbsolutePath()); builder.environment().put("LD_LIBRARY_PATH", new File(toolchain, "lib").getAbsolutePath());
@@ -97,7 +97,7 @@ final class ClangdService implements Closeable {
         }
         // 删除的头文件也会影响已有 AST；清理后重启，避免缓存仍解析到旧文件。
         if (removeStaleFiles(root, root, currentPaths)) destroyProcess();
-        if (files != null) for (int i=0;i<files.length();i++) { JSONObject f=files.optJSONObject(i); if(f==null)continue; String p=f.optString("path","").replace('\\','/'); if(!isSafeRelativePath(p))continue; File target=safeChild(root,p); if(target.getParentFile()!=null && !target.getParentFile().isDirectory() && !target.getParentFile().mkdirs()) throw new IOException("无法创建 clangd 文件目录"); java.nio.file.Files.write(target.toPath(),f.optString("code","").getBytes(StandardCharsets.UTF_8)); }
+        if (files != null) for (int i=0;i<files.length();i++) { JSONObject f=files.optJSONObject(i); if(f==null)continue; String p=f.optString("path","").replace('\\','/'); if(!isSafeRelativePath(p))continue; File target=safeChild(root,p); if(target.getParentFile()!=null && !target.getParentFile().isDirectory() && !target.getParentFile().mkdirs()) throw new IOException("无法创建 clangd 文件目录"); RuntimeCompat.writeBytes(target,f.optString("code","").getBytes(StandardCharsets.UTF_8)); }
         // 头文件查找与真实编译一致：源文件所在目录（clang 对 "…" 默认就查）、项目根、构建配置 include_paths；宏定义同样带上
         JSONObject build = body.optJSONObject("build");
         JSONArray includePaths = build == null ? null : build.optJSONArray("include_paths");
@@ -131,7 +131,7 @@ final class ClangdService implements Closeable {
         // 编译参数变了（例如新增 include 路径）要让 clangd 重新读取：内容不同才写，并重启 clangd
         String old = cc.isFile() ? read(cc) : "";
         if (!json.equals(old)) {
-            java.nio.file.Files.write(cc.toPath(), json.getBytes(StandardCharsets.UTF_8));
+            RuntimeCompat.writeBytes(cc, json.getBytes(StandardCharsets.UTF_8));
             if (!old.isEmpty()) destroyProcess();
         }
         return root;
@@ -159,11 +159,11 @@ final class ClangdService implements Closeable {
         }
         return changed;
     }
-    private static String read(File f) throws IOException { return new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); }
+    private static String read(File f) throws IOException { return new String(RuntimeCompat.readBytes(f), StandardCharsets.UTF_8); }
     private static String readLine(InputStream in) throws IOException { StringBuilder s=new StringBuilder(); int c; while((c=in.read())!=-1){if(c=='\n')break;if(c!='\r')s.append((char)c);} return c==-1&&s.length()==0?null:s.toString(); }
     private static byte[] readFully(InputStream in,int n)throws IOException{byte[]b=new byte[n];int o=0,r;while(o<n&&(r=in.read(b,o,n-o))>0)o+=r;if(o<n)throw new EOFException();return b;}
     private static boolean isSafeRelativePath(String path) { return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.startsWith(".") && !path.contains("..") && !path.endsWith("/"); }
     private static File safeChild(File root, String path) throws IOException { File child = new File(root, path); if (!child.getCanonicalPath().startsWith(root.getCanonicalPath() + File.separator)) throw new IOException("clangd 路径无效"); return child; }
-    private void destroyProcess() { if (process != null) { process.destroyForcibly(); process = null; input = null; output = null; } }
+    private void destroyProcess() { if (process != null) { RuntimeCompat.terminate(process); process = null; input = null; output = null; } }
     public void close(){synchronized(lock){destroyProcess();} ioExecutor.shutdownNow();}
 }

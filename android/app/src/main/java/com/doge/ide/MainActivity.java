@@ -720,7 +720,7 @@ public class MainActivity extends Activity {
             File manifest = new File(staging, "manifest.json");
             if (!manifest.isFile()) throw new IOException("缺少资源包 manifest.json");
             try {
-                JSONObject meta = new JSONObject(new String(java.nio.file.Files.readAllBytes(manifest.toPath()), java.nio.charset.StandardCharsets.UTF_8));
+                JSONObject meta = new JSONObject(new String(RuntimeCompat.readBytes(manifest), java.nio.charset.StandardCharsets.UTF_8));
                 if (meta.optInt("format", 0) != 1) throw new IOException("不支持的资源包格式");
                 kind = meta.optString("kind", "cpp-toolchain");
                 File mainExe;

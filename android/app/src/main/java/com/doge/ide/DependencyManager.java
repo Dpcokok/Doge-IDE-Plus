@@ -63,7 +63,7 @@ final class DependencyManager {
             }
             if (total + 16L * 1024 * 1024 > available) throw new IOException("设备剩余空间不足");
             String sha256 = hex(digest.digest());
-            java.nio.file.Files.write(new File(staging, ".doge-package.json").toPath(), new JSONObject().put("name", name).put("version", version).put("sha256", sha256).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            RuntimeCompat.writeBytes(new File(staging, ".doge-package.json"), new JSONObject().put("name", name).put("version", version).put("sha256", sha256).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             if (destination.exists() && !destination.renameTo(backup)) throw new IOException("无法备份现有依赖版本");
             if (!staging.renameTo(destination)) throw new IOException("无法安装依赖");
             JSONArray items = readRegistry(); removeEntry(items, name, version);
@@ -91,11 +91,11 @@ final class DependencyManager {
         }
         return null;
     }
-    private JSONArray readRegistry() throws Exception { if (!registry.isFile()) return new JSONArray(); return new JSONArray(new String(java.nio.file.Files.readAllBytes(registry.toPath()), java.nio.charset.StandardCharsets.UTF_8)); }
+    private JSONArray readRegistry() throws Exception { if (!registry.isFile()) return new JSONArray(); return new JSONArray(new String(RuntimeCompat.readBytes(registry), java.nio.charset.StandardCharsets.UTF_8)); }
     private void writeRegistry(JSONArray value) throws Exception {
         // 先写临时文件再替换，进程被杀时不会留下写了一半的 registry.json
         File temp = new File(root, "registry.json.tmp");
-        java.nio.file.Files.write(temp.toPath(), value.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        RuntimeCompat.writeBytes(temp, value.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         if (!temp.renameTo(registry)) {
             temp.delete();
             throw new IOException("无法写入依赖注册表");

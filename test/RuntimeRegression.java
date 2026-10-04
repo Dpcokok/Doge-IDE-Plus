@@ -4,6 +4,8 @@ import android.content.Context;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.File;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -175,6 +177,45 @@ public final class RuntimeRegression {
         }
     }
 
+    private static final class LegacyProcess extends Process {
+        private boolean finished;
+        public OutputStream getOutputStream() { return OutputStream.nullOutputStream(); }
+        public InputStream getInputStream() { return InputStream.nullInputStream(); }
+        public InputStream getErrorStream() { return InputStream.nullInputStream(); }
+        public int waitFor() { finished = true; return 0; }
+        public int exitValue() { if (!finished) throw new IllegalThreadStateException(); return 0; }
+        public void destroy() { finished = true; }
+        public boolean isAlive() { throw new AssertionError("API 26 isAlive was called on API 24"); }
+        public Process destroyForcibly() { throw new AssertionError("API 26 destroyForcibly was called on API 24"); }
+        public boolean waitFor(long time, TimeUnit unit) { throw new AssertionError("API 26 waitFor was called on API 24"); }
+    }
+
+    private static void compatibilityTests(PythonRunner runner, Path child) throws Exception {
+        android.os.Build.VERSION.SDK_INT = 24;
+        try {
+            LegacyProcess legacy = new LegacyProcess();
+            check("API 24 detects a running process without newer APIs", RuntimeCompat.isAlive(legacy));
+            check("API 24 bounded wait does not invoke the API 26 overload", !RuntimeCompat.waitFor(legacy, 25, TimeUnit.MILLISECONDS));
+            RuntimeCompat.terminate(legacy);
+            check("API 24 termination and exit detection use compatible methods", !RuntimeCompat.isAlive(legacy) && RuntimeCompat.waitFor(legacy, 25, TimeUnit.MILLISECONDS));
+            File source = new File(root, "compatible-source.bin"), target = new File(root, "compatible-target.bin");
+            byte[] bytes = "compatible 中文".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            RuntimeCompat.writeBytes(source, bytes);
+            RuntimeCompat.copyFile(source, target);
+            check("compatible file read/write/copy preserves bytes", java.util.Arrays.equals(bytes, RuntimeCompat.readBytes(target)));
+            boolean refused = false;
+            try { RuntimeCompat.copyFile(source, target); } catch (java.io.IOException expected) { refused = true; }
+            check("copy does not silently overwrite an existing file", refused);
+            RuntimeCompat.copyFile(source, target, true);
+            check("compatible deletion handles present and missing files", RuntimeCompat.deleteIfExists(target) && !RuntimeCompat.deleteIfExists(target));
+            stdinTests(runner);
+            compilerTests(child);
+            lspTests(child);
+        } finally {
+            android.os.Build.VERSION.SDK_INT = 35;
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         root = new File(args[0], "runtime");
         root.mkdirs();
@@ -184,7 +225,8 @@ public final class RuntimeRegression {
         if (args[1].equals("output") || args[1].equals("all")) outputTests(runner);
         if (args[1].equals("workspace") || args[1].equals("all")) workspaceTests();
         if (args[1].equals("lsp") || args[1].equals("all")) lspTests(Path.of(args[0], "RuntimeChild.exe"));
-        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("compat")) compatibilityTests(runner, Path.of(args[0], "RuntimeChild.exe"));
+        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }

@@ -25,6 +25,16 @@ public class Context {
     public File getFilesDir() { return root; }
 }
 '@
+    $sources['Build.java'] = @'
+package android.os;
+public final class Build { public static final class VERSION { public static int SDK_INT = 35; } }
+'@
+    $sources['Process.java'] = @'
+package android.os;
+public final class Process {
+    public static void killProcess(int pid) { java.lang.ProcessHandle.of(pid).ifPresent(java.lang.ProcessHandle::destroyForcibly); }
+}
+'@
     $sources['DependencyManager.java'] = @'
 package com.doge.ide;
 import java.io.File;
@@ -109,7 +119,7 @@ public class JSONArray {
     if ($LASTEXITCODE -ne 0) { throw 'Child-process fixture compilation failed.' }
     $sourcePaths = @(Get-ChildItem -LiteralPath $work -Filter '*.java' | ForEach-Object FullName)
     $sourcePaths += Join-Path $PSScriptRoot 'RuntimeRegression.java'
-    foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'ClangdService.java') {
+    foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'ClangdService.java', 'RuntimeCompat.java') {
         $sourcePaths += Join-Path $repoRoot "android/app/src/main/java/com/doge/ide/$name"
     }
     & $javac -encoding UTF-8 --release 17 -classpath $gson -d (Join-Path $work 'classes') @sourcePaths
