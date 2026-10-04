@@ -338,7 +338,8 @@ public class MainActivity extends Activity {
             try {
                 int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                 if ((flags & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0 || (flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) throw new IOException("文件选择器未授予项目读写权限");
-                getContentResolver().takePersistableUriPermission(uri, flags);
+                getContentResolver().takePersistableUriPermission(uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             } catch (Exception e) {
                 showAppError("项目目录授权失败", e);
                 return;
@@ -363,8 +364,9 @@ public class MainActivity extends Activity {
             Uri parent = data.getData();
             try {
                 int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                if ((flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) throw new IOException("文件选择器未授予写入权限");
-                getContentResolver().takePersistableUriPermission(parent, flags);
+                if ((flags & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0 || (flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) throw new IOException("文件选择器未授予项目读写权限");
+                getContentResolver().takePersistableUriPermission(parent,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             } catch (Exception e) { showAppError("父目录授权失败", e); return; }
             final String name = pendingProjectName;
             final String template = pendingProjectTemplate;
