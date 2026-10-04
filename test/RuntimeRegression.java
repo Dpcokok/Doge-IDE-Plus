@@ -85,12 +85,39 @@ public final class RuntimeRegression {
         }
     }
 
+    private static void compilerTests(Path child) throws Exception {
+        for (boolean headerFirst : new boolean[] { false, true }) {
+            File projectRoot = new File(root, "compiler-" + headerFirst);
+            write(projectRoot, "toolchain/manifest.json", "{\"clang\":\"bin/clang\",\"sysroot\":\"wasi-sysroot\"}");
+            new File(projectRoot, "toolchain/bin").mkdirs();
+            new File(projectRoot, "toolchain/wasi-sysroot").mkdirs();
+            for (String binary : new String[] { "clang", "clang++", "wasm-ld" }) {
+                Files.copy(child, new File(projectRoot, "toolchain/bin/" + binary).toPath());
+            }
+            JSONObject source = new JSONObject().put("path", "main.c").put("code", "#include \"math.h\"\nint main(void){return add(1,2);}");
+            JSONObject header = new JSONObject().put("path", "math.h").put("code", "int add(int,int);");
+            JSONArray files = new JSONArray();
+            if (headerFirst) files.put(header).put(source); else files.put(source).put(header);
+            LocalCompiler compiler = new LocalCompiler(new Context(projectRoot));
+            JSONObject request = new JSONObject().put("language", "c").put("entry", "main.c").put("files", files);
+            JSONObject result = new JSONObject(compiler.execute(request.toString()));
+            check("compile project regardless of header order (headerFirst=" + headerFirst + ")", "success".equals(result.optString("status")));
+
+            files = new JSONArray().put(new JSONObject().put("path", "src/main.cpp").put("code", "#include \"include/util.h\"\nint main(){return 0;}"))
+                    .put(new JSONObject().put("path", "include/util.h").put("code", "int utility();"));
+            request = new JSONObject().put("language", "cpp").put("entry", "src/main.cpp").put("files", files);
+            result = new JSONObject(compiler.execute(request.toString()));
+            check("subdirectory C++ source sees headers written later", "success".equals(result.optString("status")));
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         root = new File(args[0], "runtime");
         root.mkdirs();
         PythonRunner runner = pythonRunner(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("stdin") || args[1].equals("all")) stdinTests(runner);
-        else throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("compiler") || args[1].equals("all")) compilerTests(Path.of(args[0], "RuntimeChild.exe"));
+        if (!args[1].equals("stdin") && !args[1].equals("compiler") && !args[1].equals("all")) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }

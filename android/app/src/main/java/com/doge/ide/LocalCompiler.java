@@ -94,12 +94,21 @@ final class LocalCompiler {
                 if (!relative.matches("[A-Za-z0-9._/-]+") || relative.startsWith("/") || relative.contains("..") || relative.startsWith(".") || relative.endsWith("/")) {
                     return error("invalid_request", "项目文件路径无效: " + relative);
                 }
-                String lower = relative.toLowerCase(java.util.Locale.ROOT);
                 if (relative.equals(entry)) entryFound = true;
                 File projectFile = safeChild(work, relative);
                 File projectParent = projectFile.getParentFile();
                 if (projectParent != null) projectParent.mkdirs();
                 Files.write(projectFile.toPath(), file.optString("code", "").getBytes(StandardCharsets.UTF_8));
+            }
+            if (!entryFound) return error("invalid_request", "入口文件不存在: " + entry);
+
+            // 头文件和数据文件必须全部落盘，再逐个编译源文件；文件排列不应影响构建。
+            for (int i = 0; i < files.length(); i++) {
+                JSONObject file = files.optJSONObject(i);
+                if (file == null) continue;
+                String relative = file.optString("path", "").replace('\\', '/');
+                String lower = relative.toLowerCase(java.util.Locale.ROOT);
+                File projectFile = safeChild(work, relative);
                 if (!lower.endsWith(".c") && !lower.endsWith(".cc") && !lower.endsWith(".cpp") && !lower.endsWith(".cxx")) continue;
                 if (lower.endsWith(".cc") || lower.endsWith(".cpp") || lower.endsWith(".cxx")) effectiveLanguage = "cpp";
                 File source = projectFile;
@@ -134,7 +143,6 @@ final class LocalCompiler {
                 Files.copy(object.toPath(), cachedObject.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
             if (objects.isEmpty()) return error("invalid_request", "项目中没有 C/C++ 源文件");
-            if (!entryFound) return error("invalid_request", "入口文件不存在: " + entry);
 
             File linker = new File(toolchain, "bin/wasm-ld");
             listener.onUpdate("linking", "", compileError.toString());
