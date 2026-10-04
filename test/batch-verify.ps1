@@ -33,12 +33,26 @@ Step '前端基线测试' {
   if ($LASTEXITCODE -ne 0) { throw "baseline exit $LASTEXITCODE" }
 }
 
+# 2a. 真实管道 / 本地 HTTP / 引导脚本 / 开发代理的行为回归。
+Step '本地运行时行为回归' {
+  & (Join-Path $root 'test/runtime-regression.ps1') -Case all
+  & (Join-Path $root 'test/runtime-regression.ps1') -Case compat
+}
+Step 'Python 引导脚本回归' {
+  & python -B (Join-Path $root 'test/python-bootstrap-regression.py')
+  if ($LASTEXITCODE -ne 0) { throw "Python bootstrap exit $LASTEXITCODE" }
+}
+Step '开发代理回归' {
+  & node (Join-Path $root 'test/proxy-regression.mjs')
+  if ($LASTEXITCODE -ne 0) { throw "proxy regression exit $LASTEXITCODE" }
+}
+
 # 2b. 浏览器冒烟(headless Edge/Chrome 真实驱动；找不到浏览器时自动跳过)
 #     b5：浮层栈、键盘路由、设置/快捷键/关于、查找、项目搜索
 #     b6：多视口布局、触控尺寸、窄屏覆盖层、软键盘、默认主题
 #     completion：输入时自动补全（按键 / 输入法组字 / clangd 模拟 / 触控点选）
 Step '浏览器冒烟测试' {
-  foreach ($t in 'browser-smoke-b5.mjs', 'browser-smoke-b6.mjs', 'browser-smoke-completion.mjs') {
+  foreach ($t in 'browser-smoke-b5.mjs', 'browser-smoke-b6.mjs', 'browser-smoke-completion.mjs', 'browser-smoke-python.mjs') {
     & node (Join-Path $root "test/$t")
     if ($LASTEXITCODE -ne 0) { throw "$t exit $LASTEXITCODE" }
   }

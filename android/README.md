@@ -1,12 +1,12 @@
 # Doge IDE+ — Android 平板版
 
-> 本地 C/C++ 执行已接入：导入 ARM64 工具链资源包后，编译和运行全部在设备私有目录内完成，
+> 本地 C/C++ 与 Python 执行已接入：分别导入 ARM64 运行库资源包后，编译和运行在设备私有目录内完成，
 > 不访问云端。下文出现的云端代理、API Key 与 `X-Doge-Upstream` 只属于原云端版迁移背景，
 > 不代表当前行为；历史构建校验数据也已单独标注。
 
 把桌面版（Go + WebView2 + 单页 `doge-ide.html`）搬到 Android 平板上：
 **Java WebView 壳 + 进程内本地运行时**，不引入第三方 Gradle 依赖，一个进程、一个 APK，
-没有多余后台服务；唯一的 native 组件是随包发布的 WAMR（`libiwasm.so`）。
+没有多余后台服务；APK 携带 WAMR（`libiwasm.so`）及其 JNI 桥，Python 启动器和标准库单独导入。
 
 - 目标设备：13 英寸平板，**强制横屏**（`sensorLandscape`）
 - 最低系统：Android 7.0（API 24）
@@ -32,6 +32,10 @@ android/
       LocalServer.java         127.0.0.1 迷你 HTTP 服务
       LocalCompiler.java       调用资源包里的 Clang / wasm-ld 编译并链接 WASI
       NativeWasmRunner.java    加载 native 库，桥接 WAMR 执行 wasm
+      PythonRunner.java        独立 Python 子进程、实时输出和运行中输入
+      TaskRegistry.java        串行任务队列、输出游标、停止和最终结果
+      ClangdService.java       C/C++ 补全、诊断和 LSP 文档同步
+      RuntimeCompat.java       Android API 24 文件读写与进程操作兼容
     src/main/res/...           主题、颜色、文案、启动图标、网络安全配置
 ```
 
@@ -108,22 +112,54 @@ stderr 和退出码回传页面。资源包未导入时返回 `runtime_not_ready
 `LocalServer` 只监听 `127.0.0.1`，8 个工作线程，HTTP/1.1 keep-alive，
 静态资源带 `max-age=86400`，API 响应 `no-store`。
 
+原生 `/api/v1/**` 接口要求每次启动生成的 `X-Doge-Session` 令牌，页面通过本应用
+WebView 的 `DogeNative.executionToken()` 获取。普通浏览器或其他应用访问回环接口
+不具备该令牌。WebView 只允许当前服务的确切来源留在应用内，站外页面交给系统浏览器。
+
+Python 项目由 `PythonRunner` 写入独立临时目录，通过导入的 `doge-python` 启动器
+执行。预填 stdin 通过独立线程写入，运行期间可在输入框按 Enter 继续输入、Ctrl+D
+发送 EOF；超时使用设置中的值。入口目录和项目根目录都可用于导入模块，输出通过任务
+接口增量获取。项目程序生成的文件留在临时运行目录，运行结束时清理，尚未提供文件导出。
+
+Python 以应用身份运行，可以访问应用私有数据及网络，与 C/C++ 的 WASI 隔离能力不同。
+仅运行可信的项目代码。
+
 ## 项目工作区
 
 `local-runtime` 已加入本地项目基础模型：WebView 使用 `localStorage` 保存草稿文件列表
-和内容，编辑器左侧显示文件列表，支持切换、新建和删除 C/C++ 源文件或头文件。执行器
+和内容，编辑器左侧显示文件列表，支持切换、新建和删除 C/C++、Python 及数据文件。执行器
 会把全部项目文件写入工作目录，只编译 `.c/.cc/.cpp/.cxx`，头文件供 `#include` 使用，
 再统一链接为 WASI 程序。
 
 Android 版支持通过 Storage Access Framework 的“打开项目”选择真实目录。目录访问权限
-会持久化，打开时先递归扫描目录里的 `.c/.cc/.cpp/.cxx/.h/.hh/.hpp/.hxx`，再按
+会持久化，打开时先递归扫描目录里的 `.c/.cc/.cpp/.cxx/.h/.hh/.hpp/.hxx/.py/.txt/.json/.csv/.md`，再按
 `.doge-project.json` 清单补充文件顺序和项目名（清单外新增的源文件/头文件也会被合并进
 来，不会重复）；清单缺失或损坏时直接以扫描结果降级打开，不会卡死。“保存项目”会把
 当前文件写回该目录，并删除上一份清单中已从项目移除的旧文件（清单损坏时无从判断归属，
 不执行删除，保存会重写清单），不需要申请传统存储权限。
 
-当前仍是轻量工作区：尚未接入增量编译、CMake、clangd 或 Git 操作。默认项目包含
-`main.c`、`math.c` 和 `math.h`，用于验证多文件编译链路。
+当前已接入 Build Profile、离线依赖包、clangd 和对象缓存。缓存按项目请求、运行库
+manifest、运行库导入标识和依赖包内容标识区分；目前是整个请求一致时复用对象，尚未按
+单文件依赖关系做真正的增量构建。尚未接入 CMake、真实调试器或应用内 Git 操作。
+
+保存项目时只向原生侧同时发送一个请求，连续保存合并到最新快照；回调只更新对应项目和
+对应快照的已保存状态，保存期间继续输入的改动仍显示未保存。
+
+## 行为回归
+
+```powershell
+node test/frontend-baseline.mjs
+pwsh -File test/runtime-regression.ps1 -Case all
+pwsh -File test/runtime-regression.ps1 -Case compat
+python -B test/python-bootstrap-regression.py
+node test/proxy-regression.mjs
+node test/browser-smoke-python.mjs
+```
+
+运行时 JVM 测试在 Windows 上使用可控子进程和临时 Android 桩，检查生产任务、编译调度、
+管道、LSP 和本地 HTTP 行为；Gson 来自本地 Gradle 分发，仅用于测试。该测试不执行真实
+Android Clang/WAMR。Python 引导脚本测试使用本机 Python，浏览器测试使用 headless Edge。
+本次逐项修复、完整构建和未验证范围见 `report/BUG-FIX-REPORT-2026-10-04.md`。
 
 ## 平板适配要点（`doge-ide.html`）
 
@@ -165,5 +201,7 @@ Android SDK 35 + Gradle 8.11.1 + AGP 8.7.3，构建全程无本工程自身的�
 `proxy.py` / `proxy.mjs`（桌面浏览器开发模式用的本地代理，**不是 Android 路径**）
 保留 `X-Doge-Upstream` 与 `Authorization` 转发能力，行为和桌面 Go 壳一致。
 
-**尚未验证**：真机或模拟器上的实际运行（当前没有连接设备）、触摸手势手感、
-软键盘弹出时的布局表现，以及首次冷启动耗时。
+**当前验证范围**：源码行为测试、真实浏览器冒烟、debug APK 构建和 Android lint。
+先前 Python 启动器 P0 真机结果见 `report/PYTHON-SUPPORT-PLAN.md`；本轮修改后尚未重新
+安装真机验证，也未覆盖 Android 7 真机。真实 Clang/WAMR 的本轮执行、SAF provider
+写入、设备输入法和触摸手感仍需真机回归。
