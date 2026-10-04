@@ -281,6 +281,25 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
   eq('py-diag: 空输入', parsePythonDiagnostics('').length, 0);
 }
 {
+  const callback = html.match(/window\.projectOpened = function\([^)]*\) \{[\s\S]*?\n\};/)[0];
+  const openLanguage = new Function(`
+    let project, currentLang, currentFilePath;
+    const window = {}, editor = null, pendingDiskSave = false;
+    const getLang = id => ({ id });
+    const closeCreateProject = () => {}, resetEditorSession = () => {}, saveProject = () => {};
+    const updateEditorAvailability = () => {}, showToast = () => {}, document = { getElementById: () => ({}) };
+    const projectError = message => { throw new Error(message); };
+    ${extractFn('languageForPath')}
+    ${callback}
+    return loaded => { window.projectOpened(loaded); return project.language; };
+  `)();
+  eq('project-open: Python 语言不受首个数据文件影响', openLanguage({ language:'python', files:[{path:'config.json'},{path:'main.py'}] }), 'python');
+  eq('project-open: 空 Python 项目保留语言', openLanguage({ language:'python', files:[] }), 'python');
+  eq('project-open: C++ 语言不受首个数据文件影响', openLanguage({ language:'cpp', files:[{path:'config.json'},{path:'main.cpp'}] }), 'cpp');
+  eq('project-open: 没有清单语言时按 .py 推断', openLanguage({ files:[{path:'main.py'}] }), 'python');
+  eq('project-open: 未知语言按文件推断', openLanguage({ language:'unknown', files:[{path:'main.cpp'}] }), 'cpp');
+}
+{
   const { hashText } = loadPureFns(['hashText']);
   eq('hash: 相同内容相同哈希', hashText('int main(){}'), hashText('int main(){}'));
   ok('hash: 不同内容不同哈希', hashText('a') !== hashText('b'));

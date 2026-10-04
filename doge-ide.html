@@ -3334,7 +3334,7 @@ window.projectOpened = function(serialized) {
     const loaded = typeof serialized === 'string' ? JSON.parse(serialized) : serialized;
     if (!loaded || !Array.isArray(loaded.files)) throw new Error('项目数据无效');
     project = loaded;
-    project.language = project.language === 'cpp' || project.language === 'c' ? project.language : (project.files.length ? languageForPath(project.files[0].path).id : 'c');
+    project.language = ['c', 'cpp', 'python'].includes(project.language) ? project.language : (project.files.length ? languageForPath(project.files[0].path).id : 'c');
     currentLang = project.language;
     // 目录里的内容就是已保存的基线
     resetEditorSession(true);
