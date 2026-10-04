@@ -312,9 +312,11 @@ public class MainActivity extends Activity {
                 postToWeb("window.projectSaveResult && window.projectSaveResult(false," + JSONObject.quote("未选择项目目录") + ")");
                 return;
             }
+            // 与目录 URI 一起捕获：异步保存排队期间用户可能打开另一个项目。
+            final String rootId = projectRootId(tree);
             projectExecutor.execute(() -> {
                 try {
-                    writeProject(tree, new JSONObject(json));
+                    writeProject(tree, new JSONObject(json), rootId);
                     postToWeb("window.projectSaveResult && window.projectSaveResult(true,'')");
                 } catch (Exception e) {
                     Log.e(TAG, "project save failed", e);

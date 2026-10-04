@@ -913,7 +913,9 @@ let openFiles = [];
 const projectDocs = new Map();
 // 最近一次成功写入项目目录时每个文件内容的哈希，用于“未保存”标记
 let savedHashes = null;
-let pendingSaveSnapshot = null;
+let pendingDiskSaveRequest = null;
+let queuedDiskSaveRequest = null;
+let projectSaveSession = 0;
 let lastOutputTab = 'stdout';
 // 批次 4：两级面板状态。currentOutputTab 仍保留（=当前流或当前视图名），供旧代码读取
 let panelView = 'output';      // problems | output | tasks | debug
@@ -2648,6 +2650,8 @@ function loadOpenFiles() {
 }
 // 换项目时清空标签与文档缓存，并把磁盘内容视为已保存
 function resetEditorSession(markSaved) {
+  projectSaveSession++;
+  queuedDiskSaveRequest = null;
   openFiles = [];
   projectDocs.clear();
   for (const key of Object.keys(clangdProblems)) delete clangdProblems[key];
@@ -3273,36 +3277,55 @@ function createProjectFromForm() {
   if (project.files.length) switchProjectFile(project.files[0].path);
   else { saveProject(); swapToEmptyDoc(); renderEditorTabs(); updateLangInfo(); updateEditorAvailability(); }
 }
-function saveProjectToDisk() {
-  saveCurrentFile();
-  if (!(window.DogeNative && DogeNative.saveProject)) {
-    showToast('请在 Doge IDE+ APK 中保存项目目录', 'info');
+function saveProjectToDisk(queuedRequest) {
+  let request = queuedRequest;
+  if (!request) {
+    saveCurrentFile();
+    if (!(window.DogeNative && DogeNative.saveProject)) {
+      showToast('请在 Doge IDE+ APK 中保存项目目录', 'info');
+      return;
+    }
+    // 快照与文件内容在点击保存时一起捕获；排队期间的后续编辑不属于这次保存。
+    request = { json: JSON.stringify(project), hashes: snapshotHashes(), session: projectSaveSession };
+  }
+  if (request.session !== projectSaveSession) return;
+  if (pendingDiskSaveRequest) {
+    // 原生回调没有请求 ID，因此一次只发送一个请求，连续保存合并为最新一次快照。
+    queuedDiskSaveRequest = request;
     return;
   }
   pendingDiskSave = false;
-  // 以发起保存那一刻的内容为准：保存期间继续输入的改动仍应显示未保存
-  pendingSaveSnapshot = snapshotHashes();
+  pendingDiskSaveRequest = request;
   showToast('正在保存项目...', 'info');
-  DogeNative.saveProject(JSON.stringify(project));
+  try { DogeNative.saveProject(request.json); }
+  catch (error) { window.projectSaveResult(false, error.message || '项目保存失败'); }
 }
 window.projectSaveResult = function(ok, message) {
-  if (ok) {
-    pendingDiskSave = false;
-    if (pendingSaveSnapshot) { savedHashes = pendingSaveSnapshot; persistSavedHashes(); }
-    pendingSaveSnapshot = null;
-    renderEditorTabs();
-    renderProjectFiles();
-    showToast('项目已保存到目录', 'success');
-    return;
+  const request = pendingDiskSaveRequest;
+  if (!request) return;
+  pendingDiskSaveRequest = null;
+  const next = queuedDiskSaveRequest;
+  queuedDiskSaveRequest = null;
+  const sameProject = request.session === projectSaveSession;
+  if (sameProject) {
+    if (ok) {
+      pendingDiskSave = false;
+      savedHashes = request.hashes;
+      persistSavedHashes();
+      renderEditorTabs();
+      renderProjectFiles();
+      showToast('项目已保存到目录', 'success');
+    } else {
+      pendingDiskSave = true;
+      if (message === '未选择项目目录') {
+        showToast('请选择项目目录，选择完成后会自动保存', 'info');
+        openProject();
+      } else {
+        showToast(message || '项目保存失败', 'error');
+      }
+    }
   }
-  pendingSaveSnapshot = null;
-  pendingDiskSave = true;
-  if (message === '未选择项目目录') {
-    showToast('请选择项目目录，选择完成后会自动保存', 'info');
-    openProject();
-  } else {
-    showToast(message || '项目保存失败', 'error');
-  }
+  if (next && !(sameProject && !ok && message === '未选择项目目录')) saveProjectToDisk(next);
 };
 window.projectOpened = function(serialized) {
   // 原生侧异步载入项目后，初始化时弹出的“新建项目”不应再浮在已打开项目上

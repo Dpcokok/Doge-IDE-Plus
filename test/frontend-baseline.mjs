@@ -305,7 +305,53 @@ for (const fn of ['renderEditorTabs','closeProjectFile','renameProjectFile','ope
 }
 ok('doc: 切换文件用 swapDoc(独立撤销历史)', /function switchProjectFile[\s\S]{0,900}editor\.swapDoc\(docFor\(path\)\)/.test(html));
 ok('bp: 断点按文件路径存储', /breakpoints\[currentFilePath\]/.test(html) && !/breakpoints\[currentLang\]/.test(html));
-ok('save: 保存快照在发起时生成', /pendingSaveSnapshot = snapshotHashes\(\)/.test(html));
+
+// 保存回归：驱动真实保存入口和原生回调，覆盖多个保存请求交错的时序。
+{
+  const callback = html.match(/window\.projectSaveResult = function\([^)]*\) \{[\s\S]*?\n\};/)[0];
+  const source = ['hashText', 'dirtyTrackingEnabled', 'isFileDirty', 'snapshotHashes', 'saveProjectToDisk', 'resetEditorSession'].map(extractFn).join('\n');
+  const createSaveHarness = new Function(`
+    let project = { files: [{ path: 'main.c', code: 'initial' }] };
+    let savedHashes = null, pendingDiskSave = false;
+    let pendingDiskSaveRequest = null, queuedDiskSaveRequest = null, projectSaveSession = 0;
+    let openFiles = [], compileProblems = [];
+    const projectDocs = new Map(), clangdProblems = {}, sent = [];
+    const window = {}, DogeNative = { saveProject: json => sent.push(JSON.parse(json)) };
+    window.DogeNative = DogeNative;
+    const getProjectFile = path => project.files.find(file => file.path === path);
+    const saveCurrentFile = () => {}, persistSavedHashes = () => {}, persistOpenFiles = () => {};
+    const showToast = () => {}, renderEditorTabs = () => {}, renderProjectFiles = () => {}, openProject = () => {};
+    ${source}
+    ${callback}
+    savedHashes = snapshotHashes();
+    return {
+      sent, save: saveProjectToDisk,
+      edit: code => { project.files[0].code = code; },
+      complete: (ok, message = '') => window.projectSaveResult(ok, message),
+      dirty: () => isFileDirty('main.c'),
+      reset: code => { project = { files: [{ path: 'main.c', code }] }; resetEditorSession(true); }
+    };
+  `);
+  let h = createSaveHarness();
+  h.edit('A'); h.save(); h.edit('B'); h.save();
+  eq('save: 同一时间只向原生发送一个保存请求', h.sent.length, 1);
+  h.complete(true);
+  ok('save: A 回调不能把尚未保存的 B 标为已保存', h.dirty());
+  eq('save: A 完成后发送排队的 B', h.sent.length, 2);
+  h.complete(false, '磁盘写入失败');
+  ok('save: B 保存失败后仍显示未保存', h.dirty());
+
+  h = createSaveHarness();
+  h.edit('A'); h.save(); h.edit('B'); h.save(); h.edit('C');
+  h.complete(true);
+  eq('save: 排队保存使用点击保存时的 B 快照', h.sent[1].files[0].code, 'B');
+  h.complete(true);
+  ok('save: B 保存期间输入的 C 仍显示未保存', h.dirty());
+
+  h = createSaveHarness();
+  h.edit('A'); h.save(); h.reset('another-project'); h.complete(true);
+  ok('save: 旧项目的保存回调不污染新项目基线', !h.dirty());
+}
 
 // ── 5e. 两级面板 / 问题模型 / 每流滚动(批次 4) ─────────────────────
 {
