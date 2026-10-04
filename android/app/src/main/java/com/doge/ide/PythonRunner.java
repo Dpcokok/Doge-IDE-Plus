@@ -38,7 +38,9 @@ final class PythonRunner {
         "            traceback.print_exception(type(e), e, None)\n" +
         "if bad: sys.exit(" + SYNTAX_EXIT + ")\n" +
         "sys.argv = [entry]\n" +
-        "sys.path[0] = os.getcwd()\n" +
+        "root = os.getcwd()\n" +
+        "entry_dir = os.path.dirname(os.path.abspath(entry))\n" +
+        "sys.path[:0] = [entry_dir] + ([root] if root != entry_dir else [])\n" +
         "try:\n" +
         "    runpy.run_path(entry, run_name='__main__')\n" +
         "except SystemExit:\n" +
