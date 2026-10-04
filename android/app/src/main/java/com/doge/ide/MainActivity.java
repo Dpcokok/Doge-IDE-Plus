@@ -263,6 +263,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public boolean isPythonReady() {
+            return new File(getFilesDir(), "python/manifest.json").isFile();
+        }
+
+        @JavascriptInterface
         public boolean hasProjectWorkspace() {
             return getPreferences(MODE_PRIVATE).contains("project_tree_uri");
         }
@@ -366,12 +371,14 @@ public class MainActivity extends Activity {
                             DocumentsContract.Document.MIME_TYPE_DIR, name);
                     if (projectTree == null) throw new IOException("无法创建项目目录");
                     String projectRootId = DocumentsContract.getDocumentId(projectTree);
-                    boolean cpp = template.startsWith("cpp");
-                    String language = cpp ? "cpp" : "c";
+                    String language = template.startsWith("python") ? "python" : template.startsWith("cpp") ? "cpp" : "c";
                     JSONObject project = new JSONObject().put("name", name).put("language", language).put("files", new JSONArray());
                     if (template.endsWith("-sample")) {
-                        String code = cpp ? "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, Doge IDE!\\n\";\n    return 0;\n}\n" : "#include <stdio.h>\n\nint main(void) {\n    printf(\"Hello, Doge IDE!\\n\");\n    return 0;\n}\n";
-                        project.getJSONArray("files").put(new JSONObject().put("path", "main." + (cpp ? "cpp" : "c")).put("code", code));
+                        String code, file;
+                        if ("python".equals(language)) { file = "main.py"; code = "name = input(\"你的名字：\")\nprint(f\"Hello, {name}! 欢迎使用 Doge IDE+\")\n"; }
+                        else if ("cpp".equals(language)) { file = "main.cpp"; code = "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, Doge IDE!\\n\";\n    return 0;\n}\n"; }
+                        else { file = "main.c"; code = "#include <stdio.h>\n\nint main(void) {\n    printf(\"Hello, Doge IDE!\\n\");\n    return 0;\n}\n"; }
+                        project.getJSONArray("files").put(new JSONObject().put("path", file).put("code", code));
                     }
                     writeProject(parent, project, projectRootId);
                     getPreferences(MODE_PRIVATE).edit().putString("project_tree_uri", parent.toString()).putString("project_root_id", projectRootId).apply();
@@ -390,9 +397,9 @@ public class MainActivity extends Activity {
         Uri uri = data.getData();
         new Thread(() -> {
             try {
-                installToolchain(uri);
+                String kind = installToolchain(uri);
                 runOnUiThread(() -> {
-                    postToWeb("window.toolchainImported && window.toolchainImported(true, '')");
+                    postToWeb("window.toolchainImported && window.toolchainImported(true, '', " + JSONObject.quote(kind) + ")");
                 });
             } catch (Exception e) {
                 Log.e(TAG, "toolchain import failed", e);
@@ -545,7 +552,7 @@ public class MainActivity extends Activity {
         manifest.put("format", 1);
         manifest.put("name", project.optString("name", "Project"));
         String language = project.optString("language", "");
-        if ("c".equals(language) || "cpp".equals(language)) manifest.put("language", language);
+        if ("c".equals(language) || "cpp".equals(language) || "python".equals(language)) manifest.put("language", language);
         manifest.put("files", new JSONArray(currentPaths));
         if (project.has("buildProfiles")) manifest.put("buildProfiles", project.get("buildProfiles"));
         if (project.has("dependencies")) manifest.put("dependencies", project.get("dependencies"));
@@ -655,15 +662,15 @@ public class MainActivity extends Activity {
     }
 
     private static boolean isSafeName(String name) { return name != null && !name.isEmpty() && !".".equals(name) && !"..".equals(name) && !name.contains("/") && !name.contains("\\"); }
-    private static boolean isSourceFile(String name) { return name.matches("(?i).+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)"); }
+    private static boolean isSourceFile(String name) { return name.matches("(?i).+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx|py|txt|json|csv|md)"); }
     private static boolean isSafeProjectPath(String path) { return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.contains("..") && !path.endsWith("/"); }
 
-    private void installToolchain(Uri uri) throws IOException {
-            File root = new File(getFilesDir(), "toolchain");
-            File staging = new File(getFilesDir(), "toolchain.importing");
-            File backup = new File(getFilesDir(), "toolchain.previous");
+    /** 资源包导入：按 manifest.kind 安装到 files/toolchain（C/C++，旧包无 kind）或 files/python。返回 kind。 */
+    private String installToolchain(Uri uri) throws IOException {
+            File staging = new File(getFilesDir(), "runtime.importing");
+            File root = null, backup = null;
+            String kind = "cpp-toolchain";
             deleteTree(staging);
-            deleteTree(backup);
         if (!staging.mkdirs() && !staging.isDirectory()) throw new IOException("无法创建临时目录");
         boolean ok = false;
         try {
@@ -713,9 +720,21 @@ public class MainActivity extends Activity {
             try {
                 JSONObject meta = new JSONObject(new String(java.nio.file.Files.readAllBytes(manifest.toPath()), java.nio.charset.StandardCharsets.UTF_8));
                 if (meta.optInt("format", 0) != 1) throw new IOException("不支持的资源包格式");
-                File clang = safeArchiveChild(staging, meta.optString("clang", "bin/clang"));
-                File sysroot = safeArchiveChild(staging, meta.optString("sysroot", "wasi-sysroot"));
-                if (!clang.isFile() || !sysroot.isDirectory()) throw new IOException("资源包缺少 Clang 或 WASI sysroot");
+                kind = meta.optString("kind", "cpp-toolchain");
+                File mainExe;
+                if ("python".equals(kind)) {
+                    mainExe = safeArchiveChild(staging, meta.optString("python", "bin/doge-python"));
+                    File home = safeArchiveChild(staging, meta.optString("home", "prefix"));
+                    if (!mainExe.isFile() || !new File(home, "lib/python3.14/os.py").isFile()) throw new IOException("资源包缺少 Python 启动器或标准库");
+                    root = new File(getFilesDir(), "python");
+                } else if ("cpp-toolchain".equals(kind)) {
+                    mainExe = safeArchiveChild(staging, meta.optString("clang", "bin/clang"));
+                    File sysroot = safeArchiveChild(staging, meta.optString("sysroot", "wasi-sysroot"));
+                    if (!mainExe.isFile() || !sysroot.isDirectory()) throw new IOException("资源包缺少 Clang 或 WASI sysroot");
+                    root = new File(getFilesDir(), "toolchain");
+                } else throw new IOException("不认识的资源包类型: " + kind);
+                backup = new File(root.getPath() + ".previous");
+                deleteTree(backup);
                 JSONObject checksums = meta.optJSONObject("sha256");
                 if (checksums != null) {
                     java.util.Iterator<String> names = checksums.keys();
@@ -727,8 +746,8 @@ public class MainActivity extends Activity {
                         }
                     }
                 }
-                if (!clang.setExecutable(true, false)) throw new IOException("无法启用 Clang 执行权限");
-                for (String executable : new String[]{"clang++", "clang-21", "clang++-21", "clangd", "wasm-ld", "ld.lld"}) {
+                if (!mainExe.setExecutable(true, false)) throw new IOException("无法启用执行权限: " + mainExe.getName());
+                if ("cpp-toolchain".equals(kind)) for (String executable : new String[]{"clang++", "clang-21", "clang++-21", "clangd", "wasm-ld", "ld.lld"}) {
                     File file = new File(staging, "bin/" + executable);
                     if (file.isFile() && !file.setExecutable(true, false)) throw new IOException("无法启用工具执行权限: " + executable);
                 }
@@ -743,10 +762,11 @@ public class MainActivity extends Activity {
             deleteTree(backup);
             ok = true;
             notifyToolchainProgress(100, "资源包导入完成");
+            return kind;
         } finally {
             if (!ok) {
                 deleteTree(staging);
-                if (!root.exists() && backup.exists()) backup.renameTo(root);
+                if (root != null && backup != null && !root.exists() && backup.exists()) backup.renameTo(root);
             }
         }
     }

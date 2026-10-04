@@ -826,7 +826,7 @@ body.kb-open .explorer-scrim{bottom:0}
 
 <!-- Toast -->
 <div class="toast" id="toast"></div>
-<div class="modal-overlay" id="projectCreateModal"><div class="modal project-create-modal" role="dialog" aria-modal="true" aria-labelledby="projectCreateTitle"><h3 id="projectCreateTitle">新建项目</h3><label for="newProjectName">项目名称</label><input id="newProjectName" value="MyProject" maxlength="64"><label for="newProjectLanguage">项目语言（创建后不可更改）</label><select id="newProjectLanguage"><option value="c">C · C17</option><option value="cpp">C++ · C++20</option></select><label for="newProjectTemplate">项目模板</label><select id="newProjectTemplate"><option value="empty">空项目</option><option value="sample">示例项目</option></select><div class="modal-actions"><button onclick="closeCreateProject()">取消</button><button class="primary" onclick="createProjectFromForm()">选择目录并创建</button></div></div></div>
+<div class="modal-overlay" id="projectCreateModal"><div class="modal project-create-modal" role="dialog" aria-modal="true" aria-labelledby="projectCreateTitle"><h3 id="projectCreateTitle">新建项目</h3><label for="newProjectName">项目名称</label><input id="newProjectName" value="MyProject" maxlength="64"><label for="newProjectLanguage">项目语言（创建后不可更改）</label><select id="newProjectLanguage"><option value="c">C · C17</option><option value="cpp">C++ · C++20</option><option value="python">Python · 3.14</option></select><label for="newProjectTemplate">项目模板</label><select id="newProjectTemplate"><option value="empty">空项目</option><option value="sample">示例项目</option></select><div class="modal-actions"><button onclick="closeCreateProject()">取消</button><button class="primary" onclick="createProjectFromForm()">选择目录并创建</button></div></div></div>
 <div class="import-progress" id="importProgress"><div class="import-progress-box" role="dialog" aria-modal="true" aria-labelledby="importProgressTitle"><div class="import-progress-title" id="importProgressTitle">导入本地运行库</div><div class="import-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="import-progress-bar" id="importProgressBar"></div></div><div class="import-progress-message" id="importProgressMessage" aria-live="polite">准备中...</div><div class="import-progress-stall" id="importProgressStall" hidden><span>长时间没有进度更新，导入可能仍在进行。</span><button type="button" onclick="dismissImportProgress()">后台继续</button></div></div></div>
 
 <!-- 键盘快捷键（批次 5：内容由 COMMANDS 生成，见 openShortcuts） -->
@@ -841,6 +841,7 @@ body.kb-open .explorer-scrim{bottom:0}
 <script src="web/codemirror/codemirror.min.js"></script>
 <script src="web/codemirror/addon/hint/show-hint.min.js"></script>
 <script src="web/codemirror/mode/clike/clike.min.js"></script>
+<script src="web/codemirror/mode/python/python.min.js"></script>
 <script src="web/codemirror/addon/edit/closebrackets.min.js"></script>
 <script src="web/codemirror/addon/edit/matchbrackets.min.js"></script>
 <script src="web/codemirror/addon/selection/active-line.min.js"></script>
@@ -886,8 +887,19 @@ int main() {
     return 0;
 }
 `
+  },
+  {
+    id:'python', name:'Python', mode:'python', version:'Python 3.14',
+    color:'#3572A5', apiLang:'python', runtime:'python',
+    packs:[],
+    sample:`# Python - Doge IDE
+name = input("What's your name? ")
+print(f"Hello, {name}! Welcome to Doge IDE!")
+`
   }
 ];
+// 语言对应的运行库：C/C++ 共用 cpp-toolchain，Python 单独一个包
+function runtimeKindOf(langId) { return langId === 'python' ? 'python' : 'cpp-toolchain'; }
 
 let currentLang = 'c';
 let editor;
@@ -2593,7 +2605,12 @@ function buildFileTree(paths) {
 // 新建/重命名共用的文件名校验；返回错误信息或空字符串
 function validateFileName(name, language) {
   const n = String(name || '').trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(n) || n.includes('..')) return '请输入合法文件名，例如 main.cpp 或 config.h';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.(c|cc|cpp|cxx|h|hh|hpp|hxx|py|txt|json|csv|md)$/i.test(n) || n.includes('..')) return language === 'python' ? '请输入合法文件名，例如 main.py 或 data.txt' : '请输入合法文件名，例如 main.cpp 或 config.h';
+  if (language === 'python') {
+    if (/\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(n)) return '源文件语言必须与项目语言一致';
+    return '';
+  }
+  if (/\.py$/i.test(n)) return '源文件语言必须与项目语言一致';
   const source = /\.(c|cc|cpp|cxx)$/i.test(n);
   if (source && ((language === 'cpp' && !/\.(cc|cpp|cxx)$/i.test(n)) || (language === 'c' && !/\.c$/i.test(n)))) return '源文件语言必须与项目语言一致';
   return '';
@@ -2954,8 +2971,24 @@ function renderProblems() {
   box.innerHTML = html;
 }
 // 运行结束：从 stderr 解析问题；编译错误时自动切到问题视图，其它失败切到 stderr
+// Python traceback → 问题项：取每段异常里最后一个项目内的 File "x", line N，配上末行的异常名和消息
+function parsePythonDiagnostics(text) {
+  const out = [];
+  let loc = null;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const m = raw.match(/^\s*File "([^"]+)", line (\d+)/);
+    if (m) { if (!m[1].startsWith('/') && !m[1].startsWith('<')) loc = { file: m[1], line: Number(m[2]) || 0 }; continue; }
+    const e = raw.match(/^([A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit)|KeyboardInterrupt)(?::\s*(.*))?$/);
+    if (e && loc) {
+      out.push({ file: loc.file, line: loc.line, col: 0, severity: 'error', message: e[1] + (e[2] ? ': ' + e[2] : ''), source: /^(SyntaxError|IndentationError|TabError)$/.test(e[1]) ? 'compile' : 'runtime' });
+      loc = null;
+    }
+  }
+  return out.slice(0, 500);
+}
 function onRunFinished(status) {
-  compileProblems = parseCompilerDiagnostics(outputData.stderr);
+  compileProblems = project.language === 'python' ? parsePythonDiagnostics(outputData.stderr) : parseCompilerDiagnostics(outputData.stderr);
+  if (project.language === 'python' && status === 'runtime_error' && compileProblems.length) { switchPanelView('problems'); return; }
   if (status === 'compile_error' && compileProblems.length) { switchPanelView('problems'); return; }
   if (status && status !== 'success' && status !== 'canceled' && outputData.stderr && panelView === 'output' && outputStream === 'stdout') { switchStream('stderr'); return; }
   renderOutput();
@@ -3156,8 +3189,11 @@ function getLang(id) {
 }
 
 function languageForPath(path) {
+  if (/\.py$/i.test(path)) return getLang('python');
   return /\.(cc|cpp|cxx)$/i.test(path) ? getLang('cpp') : getLang('c');
 }
+// 非代码文件（数据/文档）只编辑不运行
+function isDataFile(path) { return /\.(txt|json|csv|md)$/i.test(path || ''); }
 function getProjectFile(path) { return project.files.find(file => file.path === path); }
 function saveCurrentFile() {
   const file = getProjectFile(currentFilePath);
@@ -3180,7 +3216,7 @@ function loadProject() {
   project.files = project.files.filter(file => file && typeof file.path === 'string' && file.path && !unique.has(file.path) && unique.set(file.path, true));
   if (project.files.length && !getProjectFile(currentFilePath)) currentFilePath = project.files[0].path;
   if (!project.files.length) currentFilePath = '';
-  project.language = project.language === 'cpp' || project.language === 'c' ? project.language : languageForPath(currentFilePath).id;
+  project.language = ['c', 'cpp', 'python'].includes(project.language) ? project.language : languageForPath(currentFilePath).id;
   currentLang = project.language;
   ensureBuildModel();
 }
@@ -3229,7 +3265,7 @@ function createProjectFromForm() {
   const template = document.getElementById('newProjectTemplate').value;
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(name)) { showToast('项目名称只能包含字母、数字、点、下划线和短横线', 'error'); return; }
   if (window.DogeNative && DogeNative.createProject) { closeCreateProject(); DogeNative.createProject(name, language + (template === 'sample' ? '-sample' : '-empty')); return; }
-  project = { name, language, files: [] }; if (template === 'sample') project.files = [{ path: 'main.' + language, code: getLang(language).sample }];
+  project = { name, language, files: [] }; if (template === 'sample') project.files = [{ path: 'main.' + (language === 'python' ? 'py' : language), code: getLang(language).sample }];
   currentLang = language;
   resetEditorSession(true);
   currentFilePath = '';
@@ -3900,19 +3936,21 @@ function renderDebugPanel() {
 async function runCode() {
   if (isRunning) { cancelExecution(); return; }
   if (!project.files.length || !currentFilePath) {
-    showToast('请先新建一个 C/C++ 文件', 'info');
+    showToast('请先新建一个源文件', 'info');
     return;
   }
   syncCurrentFile();
-  const lang = project.language === 'cpp' ? getLang('cpp') : getLang('c');
+  const lang = getLang(project.language) || getLang('c');
   currentLang = lang.id;
+  if (lang.id === 'python' && !/\.py$/i.test(currentFilePath)) { showToast('请先打开一个 .py 文件作为入口', 'info'); return; }
   const code = editor.getValue();
   const stdin = document.getElementById('stdinInput').value;
 
   if (window.DogeNative) {
-    if (!toolchainReady()) {
+    if (!runtimeReadyFor(lang.id)) {
       document.getElementById('statusDot').className = 'status-dot error';
-      outputData = { stdout:'', stderr:'本地 C/C++ 运行库尚未就绪，请先点击顶部“导入运行库”导入资源包。', info:`[${lang.name}] 运行库未就绪` };
+      const what = lang.id === 'python' ? 'Python' : 'C/C++';
+      outputData = { stdout:'', stderr:`本地 ${what} 运行库尚未就绪，请先点击顶部“导入运行库”导入 ${what} 资源包。`, info:`[${lang.name}] 运行库未就绪` };
       switchStream('stderr');
       showToast('请先导入运行库', 'error');
       return;
@@ -4063,7 +4101,7 @@ function updateRunState(state) {
   if (state === 'stopping') { chip.dataset.s = 'warn'; text.textContent = '正在停止…'; chip.onclick = null; chip.classList.remove('clickable'); return; }
   const inApk = !!window.DogeNative;
   if (!inApk) { chip.dataset.s = 'idle'; text.textContent = '浏览器预览'; chip.onclick = null; chip.classList.remove('clickable'); return; }
-  if (toolchainReady()) { chip.dataset.s = 'ready'; text.textContent = '运行库就绪'; chip.onclick = null; chip.classList.remove('clickable'); }
+  if (runtimeReadyFor(project.language)) { chip.dataset.s = 'ready'; text.textContent = '运行库就绪'; chip.onclick = null; chip.classList.remove('clickable'); }
   else { chip.dataset.s = 'err'; text.textContent = '运行库未导入 · 点此导入'; chip.onclick = () => pickToolchain(); chip.classList.add('clickable'); }
 }
 
@@ -4112,7 +4150,42 @@ function toolchainReady() {
     return false;
   }
 }
+function pythonReady() {
+  try { return !!(window.DogeNative && typeof DogeNative.isPythonReady === 'function' && DogeNative.isPythonReady()); }
+  catch (e) { return false; }
+}
+// 当前项目语言所需运行库是否就绪
+function runtimeReadyFor(langId) { return runtimeKindOf(langId) === 'python' ? pythonReady() : toolchainReady(); }
 
+// 运行中输入：Python 任务运行时，stdin 框按 Enter 把当前内容作为一行发送
+async function sendRunInput(text, eof) {
+  if (!activeTaskId) return false;
+  try {
+    const r = await fetchJsonWithTimeout('/api/v1/tasks/' + encodeURIComponent(activeTaskId) + '/input', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(eof ? { eof:true } : { text }) }, 3000);
+    return !!r.ok;
+  } catch (e) { return false; }
+}
+function bindLiveStdin() {
+  const box = document.getElementById('stdinInput');
+  if (!box || box.dataset.live) return;
+  box.dataset.live = '1';
+  box.addEventListener('keydown', async (ev) => {
+    if (!isRunning || !activeTaskId || project.language !== 'python') return;
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      const line = box.value;
+      if (await sendRunInput(line + '\n')) {
+        // 回显到 stdout，像终端一样能看到自己输入了什么
+        outputData.stdout = appendBoundedOutput(outputData.stdout, line + '\n');
+        box.value = '';
+        renderOutput();
+      }
+    } else if (ev.key === 'd' && ev.ctrlKey) {
+      ev.preventDefault();
+      sendRunInput('', true);
+    }
+  });
+}
 // 本地服务请求统一超时，避免服务无响应时永久挂起
 async function fetchJsonWithTimeout(url, options, timeoutMs) {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -4148,7 +4221,12 @@ async function runAsTask(lang, code, stdin) {
   outputData = { stdout:'', stderr:'', info:`[${lang.name}] 任务排队中...` };
   renderOutput();
   const profile = { ...activeBuildProfile(), dependencies: (project.dependencies || []).map(parseDependencyCoordinate) };
-  const body = { language: lang.apiLang, entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), build: profile, stdin: stdin || '', timeout_ms: getSetting('timeout', 30000) };
+  const isPy = lang.id === 'python';
+  // Python 走交互模式：预填的 stdin 先写入，之后可在 stdin 框里继续输入
+  const body = isPy
+    ? { language: 'python', entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), stdin: stdin || '', interactive: true }
+    : { language: lang.apiLang, entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), build: profile, stdin: stdin || '', timeout_ms: getSetting('timeout', 30000) };
+  if (isPy) { bindLiveStdin(); const box = document.getElementById('stdinInput'); if (box) box.value = ''; }
   try {
     const created = await fetchJsonWithTimeout('/api/v1/tasks', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }, TASK_REQUEST_TIMEOUT_MS);
     if (!created.task_id) throw new Error(created.message || '任务创建失败');
@@ -4178,7 +4256,7 @@ async function pollTask(taskId, lang) {
   let stderrOffset = 0;
   let failures = 0;
   // 运行超时 + 编译/排队余量；超过即判定任务失联
-  const deadline = Date.now() + (Number(getSetting('timeout', 30000)) || 30000) + 120000;
+  const deadline = Date.now() + (lang.id === 'python' ? 600000 : (Number(getSetting('timeout', 30000)) || 30000)) + 120000;
   while (true) {
     if (Date.now() > deadline) {
       try { await fetchJsonWithTimeout('/api/v1/tasks/' + encodeURIComponent(taskId) + '/cancel', { method:'POST' }, 3000); } catch (e) {}
@@ -4260,7 +4338,7 @@ function buildInfo(data, elapsed) {
   const lang = getLang(currentLang);
   const lines = [];
   lines.push(`Language: ${lang ? `${lang.name} · ${lang.version}` : currentLang}`);
-  lines.push('Runtime: 本地 (WAMR/WASI)');
+  lines.push(lang && lang.id === 'python' ? 'Runtime: 本地 (CPython 3.14)' : 'Runtime: 本地 (WAMR/WASI)');
   if (data.status) lines.push(`Status: ${data.status}`);
   if (typeof data.exit_code === 'number') lines.push(`Exit code: ${data.exit_code}`);
   if (typeof data.total_ms === 'number') lines.push(`Total: ${data.total_ms}ms`);
@@ -4740,12 +4818,14 @@ function startImportWatchdog() {
   }, 5000);
 }
 
-window.toolchainImported = function(ok, message) {
+window.toolchainImported = function(ok, message, kind) {
   hideImportProgress();
   const hint = document.getElementById('toolchainHint');
   if (ok) {
-    hint.textContent = '资源包已导入，可离线准备本地运行';
-    showToast('资源包导入成功', 'success');
+    const what = kind === 'python' ? 'Python' : 'C/C++';
+    hint.textContent = what + ' 资源包已导入，可离线本地运行';
+    showToast(what + ' 资源包导入成功', 'success');
+    updateRunState();
     // 运行库就绪后切换到 clangd 诊断，清掉本地 lint 的误报下划线
     scheduleLint();
     requestClangdDiagnostics();

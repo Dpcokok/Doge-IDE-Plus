@@ -57,7 +57,7 @@ final class LocalServer implements Closeable {
     LocalServer(Context context) {
         this.assets = context.getApplicationContext().getAssets();
         this.compiler = new LocalCompiler(context);
-        this.taskRegistry = new TaskRegistry(compiler);
+        this.taskRegistry = new TaskRegistry(compiler, new PythonRunner(context));
         this.clangd = new ClangdService(context);
     }
 
@@ -351,6 +351,16 @@ final class LocalServer implements Closeable {
         }
         if (req.path.startsWith(TASKS_PATH + "/")) {
             String rest = req.path.substring((TASKS_PATH + "/").length());
+            if (rest.endsWith("/input") && "POST".equals(req.method)) {
+                // body: {"text":"..."} 追加到 stdin；{"eof":true} 关闭输入
+                String id = rest.substring(0, rest.length() - "/input".length());
+                boolean ok;
+                try {
+                    JSONObject body = new JSONObject(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8));
+                    ok = taskRegistry.sendInput(id, body.optBoolean("eof", false) ? null : body.optString("text", ""));
+                } catch (Exception e) { ok = false; }
+                return sendBytes(out, req, ok ? 200 : 409, "application/json; charset=utf-8", ("{\"ok\":" + ok + "}").getBytes(StandardCharsets.UTF_8));
+            }
             if (rest.endsWith("/cancel") && "POST".equals(req.method)) {
                 String id = rest.substring(0, rest.length() - 7); boolean ok = taskRegistry.cancel(id);
                 return sendBytes(out, req, ok ? 200 : 404, "application/json; charset=utf-8", ("{\"task_id\":\"" + id + "\",\"status\":\"" + (ok ? "canceled" : "not_found") + "\"}").getBytes(StandardCharsets.UTF_8));

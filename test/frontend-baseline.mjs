@@ -260,7 +260,25 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
   ok('name: 拒绝目录路径', validateFileName('src/main.c', 'c') !== '');
   ok('name: 拒绝 ..', validateFileName('a..c', 'c') !== '');
   ok('name: 拒绝空名', validateFileName('', 'c') !== '');
-  ok('name: 拒绝非源码扩展名', validateFileName('notes.txt', 'c') !== '');
+  eq('name: C 项目允许数据文件 .txt', validateFileName('notes.txt', 'c'), '');
+  ok('name: 拒绝未知扩展名', validateFileName('a.exe', 'c') !== '');
+  eq('name: Python 项目 .py 合法', validateFileName('main.py', 'python'), '');
+  eq('name: Python 项目 .csv 合法', validateFileName('data.csv', 'python'), '');
+  ok('name: Python 项目拒绝 .c', validateFileName('main.c', 'python') !== '');
+  ok('name: C 项目拒绝 .py', validateFileName('main.py', 'c') !== '');
+}
+{
+  const { parsePythonDiagnostics } = loadPureFns(['parsePythonDiagnostics']);
+  const tb = 'Traceback (most recent call last):\n  File "main.py", line 4, in <module>\n    divide(1, 0)\n  File "util.py", line 2, in divide\n    return a / b\nZeroDivisionError: division by zero';
+  const p = parsePythonDiagnostics(tb);
+  eq('py-diag: 1 条', p.length, 1);
+  eq('py-diag: 最深项目帧文件', p[0].file, 'util.py');
+  eq('py-diag: 行号', p[0].line, 2);
+  eq('py-diag: 消息', p[0].message, 'ZeroDivisionError: division by zero');
+  const syn = parsePythonDiagnostics('  File "main.py", line 1\n    def foo()\n             ^\nSyntaxError: expected \':\'');
+  eq('py-diag: 语法错误归为 compile', syn[0] && syn[0].source, 'compile');
+  eq('py-diag: 标准库帧不定位', parsePythonDiagnostics('  File "/data/x/prefix/lib/python3.14/json/__init__.py", line 3\nValueError: x').length, 0);
+  eq('py-diag: 空输入', parsePythonDiagnostics('').length, 0);
 }
 {
   const { hashText } = loadPureFns(['hashText']);

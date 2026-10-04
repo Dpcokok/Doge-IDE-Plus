@@ -20,7 +20,20 @@ final class TaskRegistry {
     /** worker 当前正在执行的任务 ID。 */
     private volatile String runningTaskId;
 
-    TaskRegistry(LocalCompiler compiler) { this.compiler = compiler; }
+    private final PythonRunner python;
+
+    TaskRegistry(LocalCompiler compiler, PythonRunner python) { this.compiler = compiler; this.python = python; }
+
+    private static boolean isPython(String body) {
+        try { return "python".equals(new JSONObject(body).optString("language", "")); }
+        catch (Exception e) { return false; }
+    }
+
+    /** 运行中输入：只投递给正在运行的目标任务。text 为 null 表示 EOF。 */
+    boolean sendInput(String id, String text) {
+        if (id == null || !id.equals(runningTaskId)) return false;
+        return PythonRunner.sendInput(text);
+    }
 
     /** 当前直连执行（/api/v1/execution/run）对应的任务 ID，供 /execution/cancel 精准取消。 */
     private volatile String directTaskId;
@@ -96,12 +109,13 @@ final class TaskRegistry {
     }
 
     private void runLocked(Task task) {
-        String result = compiler.execute(task.body, (phase, stdout, stderr) -> {
+        LocalCompiler.ProgressListener listener = (phase, stdout, stderr) -> {
             synchronized (task) {
                 if (!"finished".equals(task.phase)) task.phase = phase;
                 task.append(stdout, stderr);
             }
-        });
+        };
+        String result = isPython(task.body) ? python.execute(task.body, listener) : compiler.execute(task.body, listener);
         synchronized (task) {
             if (task.cancelRequested && !"canceled".equals(task.status)) {
                 task.finish("canceled", "任务已取消");
@@ -146,7 +160,7 @@ final class TaskRegistry {
             }
         }
         // worker 为单线程，同一时刻只有一个任务在编译/运行；只有目标任务正在运行时才终止当前进程
-        if (id.equals(runningTaskId)) LocalCompiler.cancelActive();
+        if (id.equals(runningTaskId)) { LocalCompiler.cancelActive(); PythonRunner.cancelActive(); }
         return true;
     }
 
@@ -160,7 +174,7 @@ final class TaskRegistry {
         }
     }
 
-    void close() { LocalCompiler.cancelActive(); worker.shutdownNow(); }
+    void close() { LocalCompiler.cancelActive(); PythonRunner.cancelActive(); worker.shutdownNow(); }
 
     private static final class Task {
         final String id, body;

@@ -1,0 +1,2 @@
+D:\java ：jdk21
+E:\androidSDK ：androidSDK
