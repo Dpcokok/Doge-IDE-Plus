@@ -11,7 +11,7 @@ const { ev, key, typeText, send } = b;
 const hintItems = 'editor.state.completionActive && editor.state.completionActive.widget ? [...document.querySelectorAll(".CodeMirror-hints .CodeMirror-hint")].map(li => li.firstChild ? li.firstChild.textContent : li.textContent) : null';
 const hintOpen = '!!(editor.state.completionActive && editor.state.completionActive.widget)';
 const lineText = (n) => 'editor.getLine(' + n + ')';
-async function waitFor(expr, ms = 1500) {
+async function waitFor(expr, ms = 3000) {
   for (let t = 0; t < ms; t += 40) { if (await ev(expr)) return true; await sleep(40); }
   return false;
 }
@@ -282,7 +282,7 @@ try {
   ok('inc: 只列 u 开头的', await ev('(' + hintItems + ' || []).every(x => x.startsWith("u"))'));
   // unused.h 也以 u 开头；再输入 t 收窄到 util.h 再接受
   await typeKeys('t');
-  await sleep(120);
+  ok('inc: 输入 ut 后候选刷新为 util.h', await waitFor('(' + hintItems + ' || [])[0] === "util.h"'));
   await key('Tab');
   eq('inc: 接受后补上收尾引号', await ev(lineText(0)), '#include "util.h"');
   await reset('#include "geo/\n', 0, 14);

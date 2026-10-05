@@ -27,7 +27,7 @@ export async function launch({ width = 1557, height = 973, touch = false } = {})
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
   const profile = mkdtempSync(join(tmpdir(), 'doge-smoke-'));
-  const browser = spawn(exe, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--user-data-dir=' + profile, '--window-size=' + width + ',' + height, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const browser = spawn(exe, ['--headless=new', '--disable-gpu', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--user-data-dir=' + profile, '--window-size=' + width + ',' + height, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   const wsUrl = await new Promise((resolve, reject) => {
     let buf = '';
     const t = setTimeout(() => reject(new Error('浏览器启动超时')), 20000);
@@ -42,11 +42,17 @@ export async function launch({ width = 1557, height = 973, touch = false } = {})
     if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
     if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') errors.push('console.error: ' + msg.params.args.map(a => a.value ?? a.description).join(' '));
   });
-  const send = (method, params = {}, sessionId) => new Promise(r => { const id = ++seq; pending.set(id, r); ws.send(JSON.stringify({ id, method, params, sessionId })); });
+  const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
+    const id = ++seq;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error('CDP timeout: ' + method)); }, 15000);
+    pending.set(id, response => { clearTimeout(timer); resolve(response); });
+    ws.send(JSON.stringify({ id, method, params, sessionId }));
+  });
   const { result: { targetId } } = await send('Target.createTarget', { url: 'about:blank' });
   const { result: { sessionId } } = await send('Target.attachToTarget', { targetId, flatten: true });
   const S = (m, p) => send(m, p, sessionId);
   await S('Runtime.enable'); await S('Page.enable');
+  await S('Page.bringToFront');
   async function setViewport(w, h, isTouch = touch) {
     await S('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
     await S('Emulation.setTouchEmulationEnabled', { enabled: isTouch, maxTouchPoints: isTouch ? 5 : 1 });
@@ -83,8 +89,12 @@ export async function launch({ width = 1557, height = 973, touch = false } = {})
   async function typeText(t) { await S('Input.insertText', { text: t }); await sleep(60); }
   // 真实触控点击（CDP 触摸事件，会触发 pointer / click）
   async function tap(x, y) {
-    await S('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
-    await S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    // Send the complete gesture in order before waiting for acknowledgments;
+    // headless Chromium may delay touch-start acknowledgment until touch-end.
+    await Promise.all([
+      S('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] }),
+      S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    ]);
     await sleep(120);
   }
   async function close() {

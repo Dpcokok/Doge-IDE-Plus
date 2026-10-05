@@ -740,7 +740,7 @@ body.kb-open .explorer-scrim{bottom:0}
           <span class="output-placeholder">点击 Run 或按 Ctrl+Enter 运行代码...</span>
         </div>
         <div class="stdin-pane" id="stdinPane" hidden>
-          <div class="stdin-hint"><span>运行时写入进程的标准输入 · Ctrl+I 切换</span><button type="button" onclick="clearStdin()">清空</button></div>
+          <div class="stdin-hint"><span>预填测试数据 · 运行菜单 → 使用测试输入运行</span><button type="button" onclick="clearStdin()">清空</button></div>
           <textarea class="stdin-input" id="stdinInput" placeholder="在这里输入标准输入内容..." aria-label="标准输入"></textarea>
         </div>
       </div>
@@ -1630,7 +1630,11 @@ function bindAutoComplete() {
     if (change.origin !== '+input' && change.origin !== '*compose') return;
     if (!autoCompleteEnabled()) return;
     const cs = cm.state.completionActive;
-    if (cs && cs.widget) return; // 列表已打开：show-hint 随输入自己刷新
+    if (cs && cs.widget) {
+      // 输入已提交时立即刷新前缀，避免动画帧延后时 Tab 接受旧候选。
+      if (typeof cs.update === 'function') cs.update();
+      return;
+    }
     scheduleAutoComplete(cm);
   });
   editor.on('change', (cm, change) => {
@@ -2120,7 +2124,7 @@ const COMMANDS = {
   'view.explorer':     { label: '资源管理器', key: 'Ctrl+B', run: () => toggleSideView('files'), checked: () => !document.getElementById('explorer').hidden && sideView() === 'files' },
   'view.panel':        { label: '底部面板', key: 'Ctrl+J', run: () => togglePanel(), checked: () => document.getElementById('outputPanel').dataset.open === 'true' },
   'view.search':       { label: '在项目中搜索', key: 'Ctrl+Shift+F', run: () => openProjectSearch() },
-  'view.stdin':        { label: '标准输入', key: 'Ctrl+I', run: () => toggleStdin() },
+  'view.stdin':        { label: '测试输入', key: 'Ctrl+I', run: () => toggleStdin() },
   'panel.problems':    { label: '问题', run: () => switchPanelView('problems') },
   'panel.output':      { label: '输出', run: () => switchPanelView('output') },
   'panel.terminal':    { label: '终端', run: () => switchPanelView('terminal') },
@@ -4347,7 +4351,7 @@ async function runAsTask(lang, code, stdin) {
   const body = isPy
     ? { language: 'python', entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), stdin: stdin || '', interactive: false, timeout_ms: timeoutMs }
     : { language: lang.apiLang, entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), build: profile, stdin: stdin || '', timeout_ms: timeoutMs };
-  if (isPy) { bindLiveStdin(); const box = document.getElementById('stdinInput'); if (box) box.value = ''; }
+  // 测试输入保留到下一次运行；运行菜单的普通运行使用独立终端输入。
   try {
     const created = await fetchJsonWithTimeout('/api/v1/tasks', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }, TASK_REQUEST_TIMEOUT_MS);
     if (!created.task_id) throw new Error(created.message || '任务创建失败');
