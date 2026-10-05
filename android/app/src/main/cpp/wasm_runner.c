@@ -216,6 +216,7 @@ static jstring make_result(JNIEnv *env, const char *status, const char *out, con
     // and cannot safely represent supplementary characters such as emoji.
     jsize result_len = (jsize)strlen(result);
     jbyteArray bytes = (*env)->NewByteArray(env, result_len);
+    if (!bytes) { free(result); free(escaped_out); free(escaped_err); free(escaped_message); return NULL; }
     (*env)->SetByteArrayRegion(env, bytes, 0, result_len, (jbyte *)result);
     jclass string_type = (*env)->FindClass(env, "java/lang/String");
     jmethodID constructor = (*env)->GetMethodID(env, string_type, "<init>", "([BLjava/lang/String;)V");
@@ -293,11 +294,15 @@ Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
     Reader stdout_reader = {.fd=out_pipe[0], .vm=vm, .session=session_ref, .on_output=on_output};
     Reader stderr_reader = {.fd=err_pipe[0], .vm=vm, .session=session_ref, .on_output=on_output, .is_stderr=true};
     pthread_t stdout_thread, stderr_thread;
-    pthread_create(&stdout_thread, NULL, read_pipe, &stdout_reader);
-    pthread_create(&stderr_thread, NULL, read_pipe, &stderr_reader);
+    bool stdout_started = pthread_create(&stdout_thread, NULL, read_pipe, &stdout_reader) == 0;
+    bool stderr_started = pthread_create(&stderr_thread, NULL, read_pipe, &stderr_reader) == 0;
+    if (!stdout_started) close(out_pipe[0]);
+    if (!stderr_started) close(err_pipe[0]);
     Watchdog watchdog = {instance, timeout_ms > 0 ? timeout_ms : 30000, run_id};
     pthread_t watchdog_thread_id;
-    pthread_create(&watchdog_thread_id, NULL, watchdog_thread, &watchdog);
+    bool watchdog_started = pthread_create(&watchdog_thread_id, NULL, watchdog_thread, &watchdog) == 0;
+    bool threads_ready = stdout_started && stderr_started && watchdog_started;
+    if (!threads_ready) terminate_active(run_id);
     jsize stdin_size = stdin_bytes ? (*env)->GetArrayLength(env, stdin_bytes) : 0;
     uint8_t *input = NULL;
     pthread_t input_thread;
@@ -317,7 +322,7 @@ Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
         (*env)->CallVoidMethod(env, session, on_ready, (jlong)run_id);
         if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); terminate_active(run_id); }
     }
-    bool ok = wasm_application_execute_main(instance, 1, (char **)argv);
+    bool ok = threads_ready && wasm_application_execute_main(instance, 1, (char **)argv);
     close(in_pipe[0]);
     if (input_thread_started) {
         // Android's pthread implementation does not expose pthread_cancel.
@@ -338,15 +343,17 @@ Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
         if (!terminating) break;
         usleep(1000);
     }
-    pthread_join(watchdog_thread_id, NULL);
+    if (watchdog_started) pthread_join(watchdog_thread_id, NULL);
     close(out_pipe[1]); close(err_pipe[1]);
-    pthread_join(stdout_thread, NULL); pthread_join(stderr_thread, NULL);
+    if (stdout_started) pthread_join(stdout_thread, NULL);
+    if (stderr_started) pthread_join(stderr_thread, NULL);
     if (session_ref) (*env)->DeleteGlobalRef(env, session_ref);
     uint32_t exit_code = wasm_runtime_get_wasi_exit_code(instance);
     const char *exception = wasm_runtime_get_exception(instance);
+    if (!threads_ready) exception = "Unable to start terminal I/O threads";
     bool canceled = run_was_canceled(run_id);
     bool timed_out = atomic_load_explicit(&timeout_run, memory_order_acquire) == run_id;
-    const char *status = ok ? "success" : (canceled ? "canceled" : (timed_out ? "timeout" : "runtime_error"));
+    const char *status = canceled ? "canceled" : (timed_out ? "timeout" : (ok && exit_code == 0 ? "success" : "runtime_error"));
     jstring result = make_result(env, status, stdout_reader.data, stderr_reader.data, exit_code, exception, stdout_reader.truncated, stderr_reader.truncated);
     free(stdout_reader.data); free(stderr_reader.data);
     wasm_runtime_deinstantiate(instance); wasm_runtime_unload(module); free(wasm_buf);

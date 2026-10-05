@@ -17,6 +17,8 @@ try {
 <link rel="stylesheet" href="web/codemirror/addon/hint/show-hint.min.css">
 <link rel="stylesheet" href="web/codemirror/addon/dialog/dialog.min.css">
 <link rel="stylesheet" href="web/fonts/geist.css">
+<link rel="stylesheet" href="web/terminal/vendor/xterm.css">
+<link rel="stylesheet" href="web/terminal/terminal.css">
 <style>
 @font-face {
   font-family: 'Maple Mono';
@@ -701,6 +703,7 @@ body.kb-open .explorer-scrim{bottom:0}
     <div class="output-tabs panel-tabs" role="tablist" aria-label="面板视图">
       <button type="button" class="panel-tab" data-view="problems" role="tab" aria-selected="false" onclick="switchPanelView('problems')">问题<span class="n" id="problemsCount" style="display:none">0</span></button>
       <button type="button" class="panel-tab active" data-view="output" role="tab" aria-selected="true" onclick="switchPanelView('output')">输出</button>
+      <button type="button" class="panel-tab" data-view="terminal" role="tab" aria-selected="false" onclick="switchPanelView('terminal')">终端</button>
       <button type="button" class="panel-tab" data-view="tasks" role="tab" aria-selected="false" onclick="switchPanelView('tasks')">任务<span class="n" id="tasksCount" style="display:none">0</span></button>
       <button type="button" class="panel-tab" data-view="debug" role="tab" aria-selected="false" onclick="switchPanelView('debug')" hidden>调试控制台<span class="n" id="debugCount" style="display:none">0</span></button>
       <span class="panel-actions">
@@ -714,6 +717,17 @@ body.kb-open .explorer-scrim{bottom:0}
       </span>
     </div>
     <div class="panel-body">
+      <div class="panel-view terminal-view" id="terminalView" hidden>
+        <div class="terminal-toolbar"><span class="terminal-state" role="status">尚未运行</span>
+          <button type="button" data-terminal="enter" title="发送输入（Enter）">Enter</button>
+          <button type="button" data-terminal="stop" title="停止程序（Ctrl+C）">停止</button>
+          <button type="button" data-terminal="eof" title="结束输入（Ctrl+D）">EOF</button>
+          <button type="button" data-terminal="clear">清屏</button><button type="button" data-terminal="copy">复制</button>
+          <button type="button" class="terminal-jump" hidden>到底部</button>
+        </div>
+        <div class="terminal-screen" aria-label="程序终端输出"></div>
+        <div class="terminal-input-row"><span class="terminal-input-mark" aria-hidden="true">›</span><textarea class="terminal-draft" id="terminalInput" rows="1" aria-label="终端输入" spellcheck="false" autocapitalize="off" autocomplete="off" disabled></textarea></div>
+      </div>
       <div class="panel-view" id="problemsView" hidden><div class="prob-list" id="problemsList" role="list" aria-label="问题"></div></div>
       <div class="panel-view output-view" id="outputView">
         <div class="stream-bar" role="tablist" aria-label="输出流">
@@ -784,6 +798,11 @@ body.kb-open .explorer-scrim{bottom:0}
         <div class="hint">1000–30000，最长 30 秒</div>
       </div>
       <div class="settings-row">
+        <label for="interactiveTimeoutInput">交互运行超时（毫秒）</label>
+        <input type="number" id="interactiveTimeoutInput" value="600000" min="1000" max="3600000" step="1000">
+        <div class="hint">默认 10 分钟，包括等待输入的时间；构建单独限制为 30 秒</div>
+      </div>
+      <div class="settings-row">
         <label>本地 C/C++ 运行库</label>
         <div class="inline"><button type="button" onclick="pickToolchain()">导入资源包 (.zip)</button></div>
         <div class="hint" id="toolchainHint">首次运行前导入 Android ARM64 C/C++ 资源包</div>
@@ -848,6 +867,10 @@ body.kb-open .explorer-scrim{bottom:0}
 <script src="web/codemirror/addon/dialog/dialog.min.js"></script>
 <script src="web/codemirror/addon/search/searchcursor.min.js"></script>
 <script src="web/codemirror/addon/search/search.min.js"></script>
+<script src="web/terminal/vendor/xterm.js"></script>
+<script src="web/terminal/vendor/addon-fit.js"></script>
+<script src="web/terminal/terminal-session.js"></script>
+<script src="web/terminal/terminal-view.js"></script>
 <script>
 const LANGUAGES = [
   {
@@ -905,6 +928,8 @@ let currentLang = 'c';
 let editor;
 let isRunning = false;
 let activeTaskId = null;
+let terminalView = null;
+let terminalSession = null;
 let project = { name: 'Untitled Project', files: [] };
 let currentFilePath = 'main.c';
 let switchingProjectFile = false;
@@ -2085,6 +2110,7 @@ const COMMANDS = {
   'file.closeFile':    { label: '关闭文件', key: 'Ctrl+W', run: () => closeProjectFile() },
   'file.delete':       { label: '删除当前文件', danger: true, run: () => deleteProjectFile() },
   'run.run':           { label: '运行当前文件', key: 'Ctrl+Enter', run: () => runCode() },
+  'run.testInput':     { label: '使用测试输入运行', run: () => runCode('batch') },
   'run.cancel':        { label: '停止执行', key: 'Esc', run: () => cancelExecution() },
   'run.clear':         { label: '清空控制台', key: 'Ctrl+L', run: () => clearConsole() },
   'edit.find':         { label: '查找', key: 'Ctrl+F', skipInField: true, run: () => editorSearch('find') },
@@ -2097,6 +2123,7 @@ const COMMANDS = {
   'view.stdin':        { label: '标准输入', key: 'Ctrl+I', run: () => toggleStdin() },
   'panel.problems':    { label: '问题', run: () => switchPanelView('problems') },
   'panel.output':      { label: '输出', run: () => switchPanelView('output') },
+  'panel.terminal':    { label: '终端', run: () => switchPanelView('terminal') },
   'panel.tasks':       { label: '任务', run: () => switchPanelView('tasks') },
   'view.fontUp':       { label: '增大编辑器字号', key: 'Ctrl+=', run: () => adjustFont(1) },
   'view.fontDown':     { label: '减小编辑器字号', key: 'Ctrl+-', run: () => adjustFont(-1) },
@@ -2112,8 +2139,8 @@ const COMMANDS = {
 const MENUS = [
   { id: 'file', label: '文件', items: ['file.newFile','file.newProject','file.open','file.save','file.renameProject','-','file.renameFile','file.closeFile','file.delete'] },
   { id: 'edit', label: '编辑', items: ['edit.find','edit.replace','-','edit.complete','edit.autoComplete'] },
-  { id: 'run',  label: '运行', items: ['run.run','run.cancel','-','run.clear'] },
-  { id: 'view', label: '视图', items: ['view.explorer','view.search','view.panel','view.stdin','panel.problems','panel.output','panel.tasks','-','view.fontUp','view.fontDown','-','view.theme'] },
+  { id: 'run',  label: '运行', items: ['run.run','run.testInput','run.cancel','-','run.clear'] },
+  { id: 'view', label: '视图', items: ['view.explorer','view.search','view.panel','view.stdin','panel.problems','panel.output','panel.terminal','panel.tasks','-','view.fontUp','view.fontDown','-','view.theme'] },
   { id: 'debug',label: '调试', items: ['debug.start'], when: debugEnabled },
   { id: 'help', label: '帮助', items: ['help.palette','help.shortcuts','-','help.toolchain','help.deps','-','help.settings','help.about'] }
 ];
@@ -2277,6 +2304,7 @@ function menuCatOf(id) {
 // 命令实现（复用现有逻辑）
 // Ctrl+L：一次清空全部输出流与本次运行的问题（clangd 实时诊断保留，它反映的是当前源码）
 function clearConsole() {
+  if (panelView === 'terminal' && terminalView) { terminalView.clear(); return; }
   outputData = { stdout: '', stderr: '', info: '' };
   compileProblems = [];
   streamScroll = {};
@@ -3034,7 +3062,7 @@ function switchPanelView(view) {
   const panel = document.getElementById('outputPanel');
   if (panel && panel.dataset.open !== 'true') setPanelOpen(true);
   if (view === 'debug' && !debugEnabled()) view = 'output';
-  if (!['problems', 'output', 'tasks', 'debug'].includes(view)) view = 'output';
+  if (!['problems', 'output', 'terminal', 'tasks', 'debug'].includes(view)) view = 'output';
   rememberStreamScroll();
   panelView = view;
   currentOutputTab = view === 'output' ? outputStream : view;
@@ -3075,6 +3103,7 @@ function init() {
   initEditor();
   initKeybindings();
   initOutputPanel();
+  initTerminal();
   initDialogs();
   initProjectSearch();
   const ver = document.getElementById('statusVersion');
@@ -3963,7 +3992,7 @@ function renderDebugPanel() {
 }
 
 // Run
-async function runCode() {
+async function runCode(mode) {
   if (isRunning) { cancelExecution(); return; }
   if (!project.files.length || !currentFilePath) {
     showToast('请先新建一个源文件', 'info');
@@ -3985,7 +4014,8 @@ async function runCode() {
       showToast('请先导入运行库', 'error');
       return;
     }
-    await runAsTask(lang, code, stdin);
+    if (mode === 'batch') await runAsTask(lang, code, stdin);
+    else await runInTerminal(lang);
     return;
   }
 
@@ -4191,6 +4221,50 @@ function clangdEnabledForFile() {
 function runtimeReadyFor(langId) { return runtimeKindOf(langId) === 'python' ? pythonReady() : toolchainReady(); }
 
 // 运行中输入：Python 任务运行时，stdin 框按 Enter 把当前内容作为一行发送
+function initTerminal() {
+  const host = document.getElementById('terminalView');
+  if (!host || !window.DogeTerminalView) return;
+  terminalView = new DogeTerminalView(host, {
+    input: (text, eof) => terminalSession.input(text, eof),
+    stop: () => cancelExecution(), copy: text => copyText(text), notice: message => showToast(message, 'info')
+  });
+}
+async function runInTerminal(lang) {
+  if (!terminalView) { showToast('终端组件未加载', 'error'); return; }
+  isRunning = true; taskCancelRequestedAt = 0; clearDebugPanel(); beginRun(); setRunButtonState('running');
+  outputData = {stdout:'',stderr:'',info:''};
+  setPanelOpen(true); switchPanelView('terminal'); terminalView.begin(currentFilePath);
+  const timeout = Math.max(1000, Math.min(3600000, Number(getSetting('interactiveTimeout', 600000)) || 600000));
+  let history = null;
+  terminalSession = new DogeTerminalSession(fetchJsonWithTimeout, {
+    created: created => {
+      activeTaskId = created.task_id;
+      history = {id:activeTaskId,status:'queued',language:lang.name,file:currentFilePath,startedAt:Date.now()};
+      taskHistory.unshift(history); taskHistory=taskHistory.slice(0,20); renderTaskList();
+    },
+    state: state => { terminalView.setState(state); if(history){history.status=state.status||history.status;renderTaskList();} },
+    event: event => {
+      terminalView.event(event);
+      if(event.kind==='data' && (event.stream==='stdout'||event.stream==='stderr')) outputData[event.stream]=appendBoundedOutput(outputData[event.stream],event.text||'');
+    },
+    gap: () => terminalView.gap(), notice: message => showToast(message,'info')
+  });
+  try {
+    const result = await terminalSession.run({language:lang.apiLang,entry:currentFilePath,files:project.files.map(f=>({path:f.path,code:f.code})),
+      build:{...activeBuildProfile(),dependencies:(project.dependencies||[]).map(parseDependencyCoordinate)},run_mode:'interactive',compile_timeout_ms:30000,run_timeout_ms:timeout});
+    if(history){history.status=result.status;history.endedAt=Date.now();}
+    document.getElementById('statusDot').className=result.status==='success'?'status-dot success':'status-dot error';
+    compileProblems=lang.id==='python'?parsePythonDiagnostics(outputData.stderr):parseCompilerDiagnostics(outputData.stderr);
+    updateProblemBadges();
+  } catch(error) {
+    terminalView.write('\r\n['+error.message+']\r\n');
+    showToast(error.message,'error');
+    if(history){history.status='runtime_error';history.endedAt=Date.now();}
+    try {await terminalSession.cancel();} catch(ignored) {}
+  } finally {
+    isRunning=false;activeTaskId=null;setRunButtonState('idle');terminalView.setState({phase:'finished',input_ready:false});renderTaskList();
+  }
+}
 async function sendRunInput(text, eof) {
   if (!activeTaskId) return false;
   try {
@@ -4271,7 +4345,7 @@ async function runAsTask(lang, code, stdin) {
   const timeoutMs = Math.max(1000, Math.min(30000, Number(getSetting('timeout', 30000)) || 30000));
   // Python 走交互模式：预填的 stdin 先写入，之后可在 stdin 框里继续输入
   const body = isPy
-    ? { language: 'python', entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), stdin: stdin || '', interactive: true, timeout_ms: timeoutMs }
+    ? { language: 'python', entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), stdin: stdin || '', interactive: false, timeout_ms: timeoutMs }
     : { language: lang.apiLang, entry: currentFilePath, files: project.files.map(file => ({ path:file.path, code:file.code })), build: profile, stdin: stdin || '', timeout_ms: timeoutMs };
   if (isPy) { bindLiveStdin(); const box = document.getElementById('stdinInput'); if (box) box.value = ''; }
   try {
@@ -4371,6 +4445,10 @@ function renderTaskList() {
 async function cancelExecution() {
   if (!isRunning) return;
   setRunButtonState('stopping');
+  if (terminalSession && !terminalSession.closed) {
+    try { await terminalSession.cancel(); } catch (e) { showToast('停止请求失败：' + e.message, 'error'); }
+    return;
+  }
   if (activeTaskId) {
     taskCancelRequestedAt = Date.now();
     try { await fetchJsonWithTimeout('/api/v1/tasks/' + encodeURIComponent(activeTaskId) + '/cancel', { method:'POST' }, TASK_REQUEST_TIMEOUT_MS); }
@@ -4421,8 +4499,9 @@ function renderOutput() {
   updateStderrCount();
   updateProblemBadges();
   syncPanelTabs();
-  const views = { problems: 'problemsView', output: 'outputView', tasks: 'tasksView', debug: 'debugView' };
+  const views = { problems: 'problemsView', output: 'outputView', terminal: 'terminalView', tasks: 'tasksView', debug: 'debugView' };
   for (const v of Object.keys(views)) { const node = document.getElementById(views[v]); if (node) node.hidden = v !== panelView; }
+  if (panelView === 'terminal') { terminalView && terminalView.refresh(); return; }
   if (panelView === 'problems') { renderProblems(); return; }
   if (panelView === 'tasks') { renderTaskList(); return; }
   if (panelView === 'debug') { const d = document.getElementById('debugView'); if (d) d.innerHTML = renderDebugPanel(); return; }
@@ -4761,6 +4840,7 @@ function initKeybindings() {
 
 // Settings（批次 5：居中对话框，输入框 id 与保存逻辑不变）
 function loadSettingsForm() {
+  document.getElementById('interactiveTimeoutInput').value = getSetting('interactiveTimeout', 600000);
   document.getElementById('timeoutInput').value = getSetting('timeout', 30000);
   document.getElementById('codeSizeInput').value = getSetting('codeSize', defaultCodeSize());
   document.getElementById('themeInput').value = currentTheme();
@@ -4790,6 +4870,8 @@ function saveSettings() {
   const timeoutInput = document.getElementById('timeoutInput');
   const codeSizeInput = document.getElementById('codeSizeInput');
   const timeout = clampInt(timeoutInput.value, 1000, 30000, 30000);
+  const interactiveTimeout = clampInt(document.getElementById('interactiveTimeoutInput').value, 1000, 3600000, 600000);
+  setSetting('interactiveTimeout', interactiveTimeout);
   const codeSize = clampInt(codeSizeInput.value, 11, 24, defaultCodeSize());
   timeoutInput.value = timeout;
   codeSizeInput.value = codeSize;
