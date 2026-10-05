@@ -116,10 +116,19 @@ stderr 和退出码回传页面。资源包未导入时返回 `runtime_not_ready
 WebView 的 `DogeNative.executionToken()` 获取。普通浏览器或其他应用访问回环接口
 不具备该令牌。WebView 只允许当前服务的确切来源留在应用内，站外页面交给系统浏览器。
 
-Python 项目由 `PythonRunner` 写入独立临时目录，通过导入的 `doge-python` 启动器
-执行。预填 stdin 通过独立线程写入，运行期间可在输入框按 Enter 继续输入、Ctrl+D
-发送 EOF；超时使用设置中的值。入口目录和项目根目录都可用于导入模块，输出通过任务
-接口增量获取。项目程序生成的文件留在临时运行目录，运行结束时清理，尚未提供文件导出。
+Python 项目由 `PythonRunner` 写入独立临时目录，通过导入的 `doge-python` 启动器执行。
+默认运行打开“终端”，Python 和 C/C++ 共用按行输入：Enter 发送、Shift+Enter 换行、
+Ctrl+C 停止、空输入行 Ctrl+D 发送 EOF。原来的 stdin 作为预填测试数据保留，使用
+运行菜单的“使用测试输入运行”发送，发送完毕自动关闭输入。
+
+交互运行默认 10 分钟，可在设置中单独调整；编译/链接另有 30 秒时限。实时输出通过
+带游标的有序事件接口获取，每条输入带运行会话 ID 和序号，重试不会重复投递；日志
+超限会回收旧记录，继续显示最新内容。终端资源为本地 xterm.js，不依赖 CDN。
+
+入口目录和项目根目录都可用于 Python 模块导入。项目程序生成的文件留在临时运行目录，
+运行结束时清理，尚未提供文件导出。终端是按行运行终端，尚未提供 shell、常驻 REPL、
+PTY/raw 模式或隐藏密码输入。Android 原生终端行为仍待设备验收，见
+`report/INTERACTIVE-TERMINAL-IMPLEMENTATION-2026-10-05.md`。
 
 Python 以应用身份运行，可以访问应用私有数据及网络，与 C/C++ 的 WASI 隔离能力不同。
 仅运行可信的项目代码。
@@ -154,12 +163,15 @@ pwsh -File test/runtime-regression.ps1 -Case compat
 python -B test/python-bootstrap-regression.py
 node test/proxy-regression.mjs
 node test/browser-smoke-python.mjs
+node test/browser-smoke-terminal.mjs
+python -B test/wasi-terminal-regression.py
 ```
 
 运行时 JVM 测试在 Windows 上使用可控子进程和临时 Android 桩，检查生产任务、编译调度、
 管道、LSP 和本地 HTTP 行为；Gson 来自本地 Gradle 分发，仅用于测试。该测试不执行真实
 Android Clang/WAMR。Python 引导脚本测试使用本机 Python，浏览器测试使用 headless Edge。
 本次逐项修复、完整构建和未验证范围见 `report/BUG-FIX-REPORT-2026-10-04.md`。
+终端回归额外覆盖输入去重/EOF、队列背压、输出游标、真实 xterm 和 C WASI 提示刷新。
 
 ## 平板适配要点（`doge-ide.html`）
 

@@ -325,6 +325,22 @@ public final class RuntimeRegression {
             check("other loopback ports are not trusted WebView pages", !server.isTrustedOrigin("http://127.0.0.1:1/"));
             check("loopback aliases and foreign schemes cannot access the bridge", !server.isTrustedOrigin(base.replace("127.0.0.1", "localhost")) && !server.isTrustedOrigin(base.replace("http:", "https:")));
             check("static assets do not disclose the session token", !http(base, "/", null, null).body.contains(token));
+            JSONObject interactive=pythonRequest("interactive.py",5000,"").put("run_mode","interactive");
+            HttpResult created=http(base,"/api/v1/tasks",interactive.toString(),token);
+            JSONObject job=new JSONObject(created.body);String id=job.optString("task_id"),runId=job.optString("session_id");
+            check("HTTP task creation exposes a run session",created.status==202&&!runId.isEmpty());
+            JSONObject stream;long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+            do{stream=new JSONObject(http(base,"/api/v1/tasks/"+id+"/events?after=0",null,token).body);if(stream.optBoolean("input_ready",false))break;Thread.sleep(20);}while(System.nanoTime()<deadline);
+            JSONObject frame=new JSONObject().put("session_id",runId).put("seq",1).put("text","one\n");
+            check("HTTP input is acknowledged without waiting for a read",http(base,"/api/v1/tasks/"+id+"/input",frame.toString(),token).status==200);
+            check("HTTP input retries do not duplicate delivery",http(base,"/api/v1/tasks/"+id+"/input",frame.toString(),token).status==200);
+            frame.put("seq",2).put("text","two\n");http(base,"/api/v1/tasks/"+id+"/input",frame.toString(),token);
+            deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+            do{stream=new JSONObject(http(base,"/api/v1/tasks/"+id+"/events?after=0",null,token).body);if("finished".equals(stream.optString("phase")))break;Thread.sleep(20);}while(System.nanoTime()<deadline);
+            check("HTTP output stream includes data and final exit",stream.toString().contains("LINE:one")&&stream.toString().contains("LINE:two")&&stream.toString().contains("\"kind\":\"exit\""));
+            check("HTTP terminal streams require the session token",http(base,"/api/v1/tasks/"+id+"/events?after=0",null,null).status==401);
+            frame.put("seq",3).put("session_id","wrong");
+            check("HTTP input rejects another session",http(base,"/api/v1/tasks/"+id+"/input",frame.toString(),token).status==409);
         } finally { server.close(); }
     }
 
