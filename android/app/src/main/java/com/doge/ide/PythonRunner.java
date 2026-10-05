@@ -18,7 +18,7 @@ final class PythonRunner {
     static final int SYNTAX_EXIT = 65;
     private static final long MAX_OUTPUT = 2L * 1024L * 1024L;
     private static volatile Process active;
-    private static volatile OutputStream activeStdin;
+    private static volatile RunSession activeSession;
 
     // 先编译全部 .py（语法错误统一报告），再以 __main__ 运行入口；traceback 去掉引导帧
     static final String BOOT =
@@ -65,28 +65,31 @@ final class PythonRunner {
 
     /** 运行中输入：写入当前 Python 进程的 stdin。text 为 null 表示关闭输入（EOF）。 */
     static boolean sendInput(String text) {
-        OutputStream in = activeStdin;
-        if (in == null) return false;
-        try {
-            if (text == null) { in.close(); activeStdin = null; }
-            else { in.write(text.getBytes(StandardCharsets.UTF_8)); in.flush(); }
-            return true;
-        } catch (IOException e) { return false; }
+        RunSession session = activeSession;
+        try { return session != null && session.legacyInput(text).optBoolean("ok", false); }
+        catch (Exception e) { return false; }
     }
 
     String execute(String requestJson, LocalCompiler.ProgressListener listener) {
+        try {
+            JSONObject request = new JSONObject(requestJson);
+            RunSession session = new RunSession(request.optBoolean("interactive", false));
+            return execute(requestJson, listener, session);
+        } catch (Exception e) { return error("invalid_request", e.toString()); }
+    }
+
+    String execute(String requestJson, LocalCompiler.ProgressListener listener, RunSession session) {
         File work = null;
         Process process = null;
-        Thread inputWriter = null;
         try {
             JSONObject request = new JSONObject(requestJson);
             JSONArray files = request.optJSONArray("files");
             if (files == null) files = new JSONArray().put(new JSONObject().put("path", "main.py").put("code", request.optString("code", "")));
             String entry = request.optString("entry", "main.py");
-            boolean interactive = request.optBoolean("interactive", false);
+            boolean interactive = session.interactive;
             // 交互运行要等用户输入，超时放宽到 10 分钟；非交互与 C 一致最多 30 秒
-            int maxTimeout = interactive ? 600000 : 30000;
-            int timeout = Math.max(1000, Math.min(maxTimeout, request.optInt("timeout_ms", maxTimeout)));
+            int maxTimeout = interactive ? 3600000 : 30000;
+            int timeout = Math.max(1000, Math.min(maxTimeout, request.optInt("run_timeout_ms", request.optInt("timeout_ms", interactive ? 600000 : 30000))));
             File runtime = new File(filesDir, "python");
             File manifest = new File(runtime, "manifest.json");
             if (!manifest.isFile()) return error("runtime_not_ready", "请先导入 Python 运行库");
@@ -133,6 +136,7 @@ final class PythonRunner {
             listener.onUpdate("running", "", "");
             process = builder.start();
             active = process;
+            activeSession = session;
             ByteArrayOutputStream stdout = new ByteArrayOutputStream();
             ByteArrayOutputStream stderr = new ByteArrayOutputStream();
             Thread outReader = drain(process.getInputStream(), stdout, listener, true);
@@ -140,12 +144,16 @@ final class PythonRunner {
             OutputStream stdin = process.getOutputStream();
             String preset = request.optString("stdin", "");
             // 子进程可能永远不读 stdin。用独立线程投递预填内容，执行线程立即开始计时。
-            inputWriter = feedInput(process, preset, interactive);
+            final Process child = process;
+            session.bind(new RunSession.InputSink() {
+                public void write(byte[] bytes) throws IOException { stdin.write(bytes); stdin.flush(); }
+                public void close() throws IOException { stdin.close(); }
+            }, () -> RuntimeCompat.terminate(child), preset);
             boolean finished = RuntimeCompat.waitFor(process, timeout, TimeUnit.MILLISECONDS);
             if (!finished) RuntimeCompat.terminate(process);
             RuntimeCompat.waitFor(process, 2, TimeUnit.SECONDS);
             outReader.join(1000); errReader.join(1000);
-            activeStdin = null;
+            activeSession = null;
             active = null;
             closeQuietly(stdin);
             String out = stdout.toString("UTF-8"), err = stderr.toString("UTF-8");
@@ -157,37 +165,16 @@ final class PythonRunner {
         } catch (Exception e) {
             return error("runtime_error", e.getMessage() == null ? e.toString() : e.getMessage());
         } finally {
-            activeStdin = null;
+            activeSession = null;
             if (process != null) {
                 // 超时、取消或线程中断都要结束子进程，让阻塞的管道写入退出。
                 if (RuntimeCompat.isAlive(process)) RuntimeCompat.terminate(process);
                 closeQuietly(process.getOutputStream());
             }
-            if (inputWriter != null) {
-                try { inputWriter.join(1000); }
-                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
-            }
+            session.closeInput();
             active = null;
             deleteTree(work);
         }
-    }
-
-    private static Thread feedInput(Process process, String preset, boolean interactive) {
-        Thread writer = new Thread(() -> {
-            OutputStream stdin = process.getOutputStream();
-            try {
-                if (!preset.isEmpty()) {
-                    stdin.write(preset.getBytes(StandardCharsets.UTF_8));
-                    stdin.flush();
-                }
-                // 预填内容写完之后才允许交互输入，避免用户输入插到预填内容前面。
-                if (interactive && active == process && RuntimeCompat.isAlive(process)) activeStdin = stdin;
-                else stdin.close();
-            } catch (IOException ignored) { /* 子进程已结束，管道关闭会释放写入线程。 */ }
-        }, "doge-python-stdin");
-        writer.setDaemon(true);
-        writer.start();
-        return writer;
     }
 
     private static Thread drain(InputStream input, ByteArrayOutputStream output, LocalCompiler.ProgressListener listener, boolean isStdout) {
@@ -202,11 +189,10 @@ final class PythonRunner {
                     if (read == 0) continue;
                     int allowed = (int) Math.min(read, Math.max(0, MAX_OUTPUT - total));
                     total += read;
-                    if (allowed <= 0) continue;
-                    output.write(buffer, 0, allowed);
-                    byte[] chunk = new byte[pending.length + allowed];
+                    if (allowed > 0) output.write(buffer, 0, allowed);
+                    byte[] chunk = new byte[pending.length + read];
                     System.arraycopy(pending, 0, chunk, 0, pending.length);
-                    System.arraycopy(buffer, 0, chunk, pending.length, allowed);
+                    System.arraycopy(buffer, 0, chunk, pending.length, read);
                     int cut = utf8Boundary(chunk);
                     pending = java.util.Arrays.copyOfRange(chunk, cut, chunk.length);
                     String text = new String(chunk, 0, cut, StandardCharsets.UTF_8);

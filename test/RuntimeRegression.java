@@ -113,6 +113,11 @@ public final class RuntimeRegression {
             request = new JSONObject().put("language", "cpp").put("entry", "src/main.cpp").put("files", files);
             result = new JSONObject(compiler.execute(request.toString()));
             check("subdirectory C++ source sees headers written later", "success".equals(result.optString("status")));
+            RunSession terminal = new RunSession(true);
+            request.put("run_mode", "interactive").put("compile_timeout_ms", 30000).put("run_timeout_ms", 600000);
+            result = new JSONObject(compiler.execute(request.toString(), (p,o,e)->terminal.output(p,o,e), terminal));
+            check("interactive compilation links the terminal startup helper", "success".equals(result.optString("status")) && result.optBoolean("output_complete", false));
+            check("interactive WASI output is sent to its session", terminal.events(0).toString().contains("WASI prompt:"));
         }
     }
 
@@ -323,10 +328,74 @@ public final class RuntimeRegression {
         } finally { server.close(); }
     }
 
+    private static void sessionTests(PythonRunner runner) throws Exception {
+        RunSession session = new RunSession(true);
+        StringBuffer input = new StringBuffer();
+        CountDownLatch closed = new CountDownLatch(1);
+        session.bind(new RunSession.InputSink() {
+            public void write(byte[] bytes) { input.append(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)); }
+            public void close() { closed.countDown(); }
+        }, () -> closed.countDown(), "");
+        check("session rejects another run's input", !session.input("wrong", 1, "bad").optBoolean("ok", false));
+        check("session accepts ordered UTF8 input", session.input(session.id, 1, "中文😀\n").optBoolean("ok", false));
+        check("retrying the same sequence is idempotent", session.input(session.id, 1, "中文😀\n").optBoolean("ok", false));
+        check("a reused sequence with different input is rejected", !session.input(session.id, 1, "different").optBoolean("ok", false));
+        check("sequence gaps are rejected", !session.input(session.id, 3, "gap").optBoolean("ok", false));
+        check("EOF is accepted after previous input", session.input(session.id, 2, null).optBoolean("ok", false));
+        check("repeated EOF acknowledgment is idempotent", session.input(session.id, 2, null).optBoolean("ok", false));
+        check("input after EOF is rejected", !session.input(session.id, 3, "late").optBoolean("ok", false));
+        check("EOF drains earlier input first", closed.await(3, TimeUnit.SECONDS) && "中文😀\n".equals(input.toString()));
+        session.output("running", "o", "e"); session.finish("success", 0);
+        JSONArray events = session.events(0).optJSONArray("events");
+        check("exit event follows all output", "exit".equals(events.optJSONObject(events.length()-1).optString("kind")));
+        long after = session.events(0).optLong("next_seq", 0);
+        check("event cursor prevents repeated output", session.events(after).optJSONArray("events").length()==0);
+
+        RunSession bounded = new RunSession(true);
+        for(int i=0;i<1000;i++) bounded.output("running", "x".repeat(4096), "");
+        bounded.output("running", "LATEST", ""); bounded.finish("success", 0);
+        JSONObject batch=bounded.events(0);
+        check("bounded history reports a replay gap", batch.optBoolean("gap", false));
+        StringBuffer replay=new StringBuffer(); long cursor=0;
+        do {batch=bounded.events(cursor);JSONArray frames=batch.optJSONArray("events");for(int i=0;i<frames.length();i++)replay.append(frames.optJSONObject(i).optString("text"));cursor=batch.optLong("next_seq",cursor);}while(batch.optBoolean("has_more",false));
+        check("large output keeps the newest content", replay.toString().endsWith("LATEST") && replay.length()<2*1024*1024);
+        session.closeInput(); bounded.closeInput();
+
+        RunSession blocked = new RunSession(true);
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        blocked.bind(new RunSession.InputSink() {
+            public void write(byte[] bytes) throws java.io.IOException {entered.countDown();try{release.await();}catch(InterruptedException e){throw new java.io.IOException(e);}}
+            public void close(){release.countDown();}
+        }, () -> release.countDown(), "");
+        String chunk="x".repeat(64*1024);
+        for(int i=1;i<=4;i++) check("input queue accepts bounded frame " + i,blocked.input(blocked.id,i,chunk).optBoolean("ok",false));
+        check("full pipe is exercised without blocking the API",entered.await(1,TimeUnit.SECONDS));
+        check("input queue applies backpressure without advancing sequence",!blocked.input(blocked.id,5,"overflow").optBoolean("ok",false));
+        check("oversized input is rejected",!blocked.input(blocked.id,5,chunk+"x").optBoolean("ok",false));
+        blocked.cancel();blocked.closeInput();
+        check("cancellation closes a blocked input queue",!blocked.input(blocked.id,5,"late").optBoolean("ok",false));
+
+        TaskRegistry tasks=new TaskRegistry(new LocalCompiler(new Context(root)),runner);
+        try {
+            JSONObject request=pythonRequest("interactive.py",3000,"").put("run_mode","interactive");
+            String id=tasks.submit(request.toString());JSONObject metadata;long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+            do{metadata=tasks.events(id,0);if(metadata.optBoolean("input_ready",false))break;Thread.sleep(20);}while(System.nanoTime()<until);
+            String runId=metadata.optString("session_id");
+            check("task exposes session-bound input readiness",metadata.optBoolean("input_ready",false));
+            tasks.input(id,runId,1,"first\n");tasks.input(id,runId,1,"first\n");tasks.input(id,runId,2,"second\n");
+            until=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
+            do{metadata=tasks.events(id,0);if("finished".equals(metadata.optString("phase")))break;Thread.sleep(20);}while(System.nanoTime()<until);
+            check("session input reaches the child exactly once",tasks.get(id).optString("stdout").trim().equals("LINE:first\r\nLINE:second"));
+            check("finished tasks reject late input",!tasks.input(id,runId,3,"late").optBoolean("ok",false));
+        } finally {tasks.close();}
+    }
+
     public static void main(String[] args) throws Exception {
         root = new File(args[0], "runtime");
         root.mkdirs();
         PythonRunner runner = pythonRunner(Path.of(args[0], "RuntimeChild.exe"));
+        // Session identity initialization is not part of the child execution timeout.
+        new RunSession(false);
         if (args[1].equals("stdin") || args[1].equals("all")) stdinTests(runner);
         if (args[1].equals("compiler") || args[1].equals("all")) compilerTests(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("output") || args[1].equals("all")) outputTests(runner);
@@ -335,7 +404,8 @@ public final class RuntimeRegression {
         if (args[1].equals("compat")) compatibilityTests(runner, Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("cache") || args[1].equals("all")) cacheTests(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("server") || args[1].equals("all")) serverSecurityTests();
-        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "server", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("session") || args[1].equals("all")) sessionTests(runner);
+        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "server", "session", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }

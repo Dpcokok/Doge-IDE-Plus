@@ -21,8 +21,15 @@ final class NativeWasmRunner {
 
     static synchronized String run(byte[] wasm, byte[] stdin, int timeoutMs) {
         if (!ensureLoaded()) return "{\"status\":\"runtime_error\",\"message\":\"Native runtime unavailable\"}";
-        return nativeRun(wasm, stdin, timeoutMs);
+        return nativeRun(wasm, stdin, timeoutMs, null);
     }
-    private static synchronized native String nativeRun(byte[] wasm, byte[] stdin, int timeoutMs);
+    static synchronized String runInteractive(byte[] wasm, int timeoutMs, RunSession session) {
+        if (!ensureLoaded()) return "{\"status\":\"runtime_error\",\"message\":\"Native runtime unavailable\"}";
+        return nativeRun(wasm, new byte[0], timeoutMs, session);
+    }
+    private static native String nativeRun(byte[] wasm, byte[] stdin, int timeoutMs, RunSession session);
+    static native boolean writeInput(long handle, byte[] bytes);
+    static native void closeInput(long handle);
+    static native void cancelRun(long handle);
     static native void cancel();
 }

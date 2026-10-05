@@ -31,8 +31,18 @@ final class TaskRegistry {
 
     /** 运行中输入：只投递给正在运行的目标任务。text 为 null 表示 EOF。 */
     boolean sendInput(String id, String text) {
-        if (id == null || !id.equals(runningTaskId)) return false;
-        return PythonRunner.sendInput(text);
+        try { Task task; synchronized (this) { task = tasks.get(id); }
+            return task != null && task.session.legacyInput(text).optBoolean("ok", false);
+        } catch (Exception e) { return false; }
+    }
+
+    synchronized JSONObject input(String id, String sessionId, long seq, String text) throws Exception {
+        Task task = tasks.get(id);
+        return task == null ? null : task.session.input(sessionId, seq, text);
+    }
+    synchronized JSONObject events(String id, long after) throws Exception {
+        Task task = tasks.get(id);
+        return task == null ? null : task.session.events(after).put("task_id", id);
     }
 
     /** 当前直连执行（/api/v1/execution/run）对应的任务 ID，供 /execution/cancel 精准取消。 */
@@ -88,7 +98,8 @@ final class TaskRegistry {
         }
         if (unfinished >= 20) throw new IllegalStateException("任务队列已满");
         String id = "t" + sequence.incrementAndGet();
-        Task task = new Task(id, body);
+        JSONObject request = new JSONObject(body);
+        Task task = new Task(id, body, "interactive".equals(request.optString("run_mode")) || request.optBoolean("interactive", false));
         tasks.put(id, task);
         task.future = worker.submit(() -> run(task));
         return task;
@@ -113,20 +124,30 @@ final class TaskRegistry {
             synchronized (task) {
                 if (!"finished".equals(task.phase)) task.phase = phase;
                 task.append(stdout, stderr);
+                task.session.output(phase, stdout, stderr);
             }
         };
-        String result = isPython(task.body) ? python.execute(task.body, listener) : compiler.execute(task.body, listener);
+        String result = isPython(task.body) ? python.execute(task.body, listener, task.session) : compiler.execute(task.body, listener, task.session);
         synchronized (task) {
             if (task.cancelRequested && !"canceled".equals(task.status)) {
                 task.finish("canceled", "任务已取消");
                 return;
             }
+            int exitCode = -1;
             try {
                 JSONObject value = new JSONObject(result);
+                exitCode = value.optInt("exit_code", -1);
                 task.status = value.optString("status", "runtime_error");
                 String finalStdout = value.optString("stdout", "");
                 String finalStderr = value.optString("stderr", value.optString("message", ""));
                 boolean completeOutput = value.optBoolean("output_complete", false);
+                // Streaming runners have already published output; nonstreamed failure messages still need an event.
+                if (value.has("message")) task.session.output(task.phase, "", value.optString("message", ""));
+                else if (!completeOutput && !task.session.interactive) task.session.output(task.phase, finalStdout, finalStderr);
+                else if (!completeOutput && task.session.interactive) {
+                    task.session.output(task.phase, finalStdout.isEmpty() || task.stdout.contains(finalStdout) ? "" : finalStdout,
+                            finalStderr.isEmpty() || task.stderr.contains(finalStderr) ? "" : finalStderr);
+                }
                 task.stdout = appendBounded(completeOutput ? "" : task.stdout, finalStdout);
                 task.stderr = appendBounded(completeOutput ? "" : task.stderr, finalStderr);
                 // 直连接口和任务快照使用同一份最终输出，保留其他执行元数据。
@@ -134,6 +155,7 @@ final class TaskRegistry {
                 task.result = value.toString();
             } catch (Exception e) { task.finish("runtime_error", e.toString()); return; }
             task.phase = "finished";
+            task.session.finish(task.status, exitCode);
             task.notifyAll();
         }
         synchronized (this) { pruneFinished(); }
@@ -156,6 +178,7 @@ final class TaskRegistry {
         synchronized (task) {
             if ("finished".equals(task.phase)) return false;
             task.cancelRequested = true;
+            task.session.cancel();
             if ("queued".equals(task.phase)) {
                 if (task.future != null) task.future.cancel(false);
                 task.finish("canceled", "任务已取消");
@@ -181,12 +204,13 @@ final class TaskRegistry {
 
     private static final class Task {
         final String id, body;
+        final RunSession session;
         String phase = "queued", status = "queued", stdout = "", stderr = "", result = "";
         boolean cancelRequested;
         Future<?> future;
-        Task(String id, String body) { this.id = id; this.body = body; }
+        Task(String id, String body, boolean interactive) { this.id = id; this.body = body; session = new RunSession(interactive); }
         // 调用方必须持有本对象锁
-        void finish(String value, String message) { status = value; stderr = message; phase = "finished"; notifyAll(); }
+        void finish(String value, String message) { status = value; stderr = message; phase = "finished"; session.finish(value, -1); notifyAll(); }
         void append(String out, String err) { stdout = appendBounded(stdout, out); stderr = appendBounded(stderr, err); }
         JSONObject snapshot() throws Exception {
             return new JSONObject().put("task_id", id).put("phase", phase).put("status", status)

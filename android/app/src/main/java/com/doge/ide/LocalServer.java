@@ -358,7 +358,9 @@ final class LocalServer implements Closeable {
             if ("POST".equals(req.method)) {
                 try {
                     String id = taskRegistry.submit(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8));
-                    return sendBytes(out, req, 202, "application/json; charset=utf-8", ("{\"task_id\":\"" + id + "\",\"status\":\"queued\"}").getBytes(StandardCharsets.UTF_8));
+                    JSONObject created = taskRegistry.events(id, 0);
+                    return sendBytes(out, req, 202, "application/json; charset=utf-8", new JSONObject().put("task_id", id)
+                            .put("session_id", created.optString("session_id")).put("status", "queued").toString().getBytes(StandardCharsets.UTF_8));
                 } catch (IllegalStateException full) { return sendBytes(out, req, 429, "application/json; charset=utf-8", ("{\"status\":\"error\",\"message\":" + JSONObject.quote(full.getMessage()) + "}").getBytes(StandardCharsets.UTF_8)); }
                 catch (Exception bad) { return sendBytes(out, req, 400, "application/json; charset=utf-8", ("{\"status\":\"error\",\"message\":" + JSONObject.quote(bad.toString()) + "}").getBytes(StandardCharsets.UTF_8)); }
             }
@@ -369,9 +371,23 @@ final class LocalServer implements Closeable {
         }
         if (req.path.startsWith(TASKS_PATH + "/")) {
             String rest = req.path.substring((TASKS_PATH + "/").length());
+            if (rest.endsWith("/events") && "GET".equals(req.method)) {
+                String id = rest.substring(0, rest.length() - "/events".length());
+                try {
+                    JSONObject events = taskRegistry.events(id, queryLong(req.query, "after", 0));
+                    return sendBytes(out, req, events == null ? 404 : 200, "application/json; charset=utf-8",
+                            (events == null ? "{\"message\":\"会话不存在\"}" : events.toString()).getBytes(StandardCharsets.UTF_8));
+                } catch (Exception e) { return sendBytes(out, req, 400, "application/json", "{}".getBytes(StandardCharsets.UTF_8)); }
+            }
+            if (rest.endsWith("/eof") && "POST".equals(req.method)) {
+                return inputResponse(out, req, rest.substring(0, rest.length() - 4), true);
+            }
             if (rest.endsWith("/input") && "POST".equals(req.method)) {
-                // body: {"text":"..."} 追加到 stdin；{"eof":true} 关闭输入
                 String id = rest.substring(0, rest.length() - "/input".length());
+                try {
+                    JSONObject body = new JSONObject(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8));
+                    if (body.has("session_id")) return inputResponse(out, req, id, body.optBoolean("eof", false));
+                } catch (Exception ignored) {}
                 boolean ok;
                 try {
                     JSONObject body = new JSONObject(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8));
@@ -442,6 +458,23 @@ final class LocalServer implements Closeable {
             }
         }
         return fallback;
+    }
+
+    private static long queryLong(String query, String key, long fallback) {
+        for (String part : query.split("&")) {
+            String[] item = part.split("=", 2);
+            if (item.length == 2 && key.equals(item[0])) try { return Math.max(0, Long.parseLong(item[1])); } catch (NumberFormatException ignored) {}
+        }
+        return fallback;
+    }
+
+    private boolean inputResponse(OutputStream out, Request req, String id, boolean eof) throws IOException {
+        try {
+            JSONObject body = new JSONObject(new String(req.body == null ? new byte[0] : req.body, StandardCharsets.UTF_8));
+            JSONObject result = taskRegistry.input(id, body.optString("session_id"), body.optLong("seq", 0), eof ? null : body.optString("text", ""));
+            return sendBytes(out, req, result == null ? 404 : result.optBoolean("ok", false) ? 200 : 409,
+                    "application/json; charset=utf-8", (result == null ? "{\"ok\":false}" : result.toString()).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception bad) { return sendBytes(out, req, 400, "application/json", "{\"ok\":false}".getBytes(StandardCharsets.UTF_8)); }
     }
 
     private boolean sendAsset(OutputStream out, Request req) throws IOException {

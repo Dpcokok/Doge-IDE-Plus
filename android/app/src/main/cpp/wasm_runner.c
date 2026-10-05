@@ -9,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 
 #include "wasm_export.h"
 
@@ -18,6 +19,10 @@ typedef struct {
     size_t size;
     size_t capacity;
     bool truncated;
+    JavaVM *vm;
+    jobject session;
+    jmethodID on_output;
+    bool is_stderr;
 } Reader;
 
 typedef struct {
@@ -59,6 +64,7 @@ static bool terminate_in_progress;
 static atomic_uint run_sequence;
 static atomic_uint cancel_upto;
 static atomic_uint timeout_run;
+static int active_stdin = -1;
 static void init_runtime(void) { signal(SIGPIPE, SIG_IGN); wasm_runtime_init(); }
 
 static bool run_was_canceled(unsigned id) {
@@ -72,6 +78,8 @@ static void terminate_active(unsigned run_id) {
     if (!terminate_in_progress && !active_done && active_instance != NULL && active_run_id == run_id) {
         terminate_in_progress = true;
         target = active_instance;
+        // A guest blocked in fd_read must see EOF before the interpreter can observe termination.
+        if (active_stdin >= 0) { close(active_stdin); active_stdin = -1; }
     }
     pthread_mutex_unlock(&active_lock);
     if (target != NULL) wasm_runtime_terminate(target);
@@ -86,7 +94,19 @@ static void *read_pipe(void *arg) {
     Reader *r = (Reader *)arg;
     char buf[4096];
     ssize_t n;
+    JNIEnv *env = NULL;
+    bool attached = false;
+    if (r->session && (*r->vm)->AttachCurrentThread(r->vm, &env, NULL) == JNI_OK) attached = true;
     while ((n = read(r->fd, buf, sizeof(buf))) > 0) {
+        if (attached) {
+            jbyteArray bytes = (*env)->NewByteArray(env, (jsize)n);
+            if (bytes) {
+                (*env)->SetByteArrayRegion(env, bytes, 0, (jsize)n, (jbyte *)buf);
+                (*env)->CallVoidMethod(env, r->session, r->on_output, bytes, r->is_stderr ? JNI_TRUE : JNI_FALSE);
+                (*env)->DeleteLocalRef(env, bytes);
+            }
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        }
         const size_t max_stream = 1024 * 1024;
         size_t keep = (size_t)n;
         if (r->size >= max_stream) { r->truncated = true; continue; }
@@ -104,6 +124,7 @@ static void *read_pipe(void *arg) {
     }
     if (r->data) r->data[r->size] = 0;
     close(r->fd);
+    if (attached) (*r->vm)->DetachCurrentThread(r->vm);
     return NULL;
 }
 
@@ -191,7 +212,16 @@ static jstring make_result(JNIEnv *env, const char *status, const char *out, con
              status, escaped_out ? escaped_out : "\"\"", escaped_err ? escaped_err : "\"\"", exit_code,
              out_truncated ? "true" : "false", err_truncated ? "true" : "false",
              escaped_message ? ",\"message\":" : "", escaped_message ? escaped_message : "");
-    jstring value = (*env)->NewStringUTF(env, result);
+    // JSON strings contain standard UTF-8. NewStringUTF expects modified UTF-8
+    // and cannot safely represent supplementary characters such as emoji.
+    jsize result_len = (jsize)strlen(result);
+    jbyteArray bytes = (*env)->NewByteArray(env, result_len);
+    (*env)->SetByteArrayRegion(env, bytes, 0, result_len, (jbyte *)result);
+    jclass string_type = (*env)->FindClass(env, "java/lang/String");
+    jmethodID constructor = (*env)->GetMethodID(env, string_type, "<init>", "([BLjava/lang/String;)V");
+    jstring encoding = (*env)->NewStringUTF(env, "UTF-8");
+    jstring value = (*env)->NewObject(env, string_type, constructor, bytes, encoding);
+    (*env)->DeleteLocalRef(env, bytes); (*env)->DeleteLocalRef(env, encoding); (*env)->DeleteLocalRef(env, string_type);
     free(result); free(escaped_out); free(escaped_err); free(escaped_message);
     return value;
 }
@@ -199,7 +229,7 @@ static jstring make_result(JNIEnv *env, const char *status, const char *out, con
 JNIEXPORT jstring JNICALL
 Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
                                         jbyteArray wasm_bytes, jbyteArray stdin_bytes,
-                                        jint timeout_ms) {
+                                        jint timeout_ms, jobject session) {
     (void)unused;
     pthread_once(&runtime_once, init_runtime);
     unsigned run_id = atomic_fetch_add_explicit(&run_sequence, 1, memory_order_relaxed) + 1;
@@ -243,9 +273,25 @@ Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
         return make_result(env, "runtime_error", "", "", 0, "runner busy", false, false);
     }
     active_instance = instance; active_run_id = run_id; active_done = false;
+    if (session) {
+        active_stdin = in_pipe[1];
+        int flags = fcntl(active_stdin, F_GETFL, 0);
+        if (flags >= 0) fcntl(active_stdin, F_SETFL, flags | O_NONBLOCK);
+    }
     pthread_mutex_unlock(&active_lock);
 
-    Reader stdout_reader = {out_pipe[0], NULL, 0, 0, false}, stderr_reader = {err_pipe[0], NULL, 0, 0, false};
+    JavaVM *vm = NULL;
+    jobject session_ref = session ? (*env)->NewGlobalRef(env, session) : NULL;
+    jmethodID on_output = NULL, on_ready = NULL;
+    if (session_ref) {
+        (*env)->GetJavaVM(env, &vm);
+        jclass type = (*env)->GetObjectClass(env, session);
+        on_output = (*env)->GetMethodID(env, type, "onNativeOutput", "([BZ)V");
+        on_ready = (*env)->GetMethodID(env, type, "onNativeReady", "(J)V");
+        (*env)->DeleteLocalRef(env, type);
+    }
+    Reader stdout_reader = {.fd=out_pipe[0], .vm=vm, .session=session_ref, .on_output=on_output};
+    Reader stderr_reader = {.fd=err_pipe[0], .vm=vm, .session=session_ref, .on_output=on_output, .is_stderr=true};
     pthread_t stdout_thread, stderr_thread;
     pthread_create(&stdout_thread, NULL, read_pipe, &stdout_reader);
     pthread_create(&stderr_thread, NULL, read_pipe, &stderr_reader);
@@ -264,8 +310,13 @@ Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
     InputWriter writer = {in_pipe[1], input, input ? (size_t)stdin_size : 0, &input_cancelled};
     int input_flags = fcntl(in_pipe[1], F_GETFL, 0);
     if (input_flags >= 0) fcntl(in_pipe[1], F_SETFL, input_flags | O_NONBLOCK);
-    if (pthread_create(&input_thread, NULL, write_pipe, &writer) == 0) input_thread_started = true;
-    else close(in_pipe[1]);
+    if (!session) {
+        if (pthread_create(&input_thread, NULL, write_pipe, &writer) == 0) input_thread_started = true;
+        else close(in_pipe[1]);
+    } else if (on_ready) {
+        (*env)->CallVoidMethod(env, session, on_ready, (jlong)run_id);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); terminate_active(run_id); }
+    }
     bool ok = wasm_application_execute_main(instance, 1, (char **)argv);
     close(in_pipe[0]);
     if (input_thread_started) {
@@ -276,6 +327,7 @@ Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
     }
     free(input);
     pthread_mutex_lock(&active_lock);
+    if (active_stdin >= 0) { close(active_stdin); active_stdin = -1; }
     active_done = true;
     active_instance = NULL;
     pthread_mutex_unlock(&active_lock);
@@ -289,6 +341,7 @@ Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
     pthread_join(watchdog_thread_id, NULL);
     close(out_pipe[1]); close(err_pipe[1]);
     pthread_join(stdout_thread, NULL); pthread_join(stderr_thread, NULL);
+    if (session_ref) (*env)->DeleteGlobalRef(env, session_ref);
     uint32_t exit_code = wasm_runtime_get_wasi_exit_code(instance);
     const char *exception = wasm_runtime_get_exception(instance);
     bool canceled = run_was_canceled(run_id);
@@ -298,6 +351,53 @@ Java_com_doge_ide_NativeWasmRunner_nativeRun(JNIEnv *env, jclass unused,
     free(stdout_reader.data); free(stderr_reader.data);
     wasm_runtime_deinstantiate(instance); wasm_runtime_unload(module); free(wasm_buf);
     return result;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_doge_ide_NativeWasmRunner_writeInput(JNIEnv *env, jclass unused, jlong handle, jbyteArray bytes) {
+    (void)unused;
+    pthread_mutex_lock(&active_lock);
+    int fd = !active_done && active_run_id == (unsigned)handle && active_stdin >= 0 ? dup(active_stdin) : -1;
+    pthread_mutex_unlock(&active_lock);
+    if (fd < 0) return JNI_FALSE;
+    jsize size = (*env)->GetArrayLength(env, bytes);
+    uint8_t *buffer = malloc((size_t)size + 1);
+    if (!buffer) { close(fd); return JNI_FALSE; }
+    (*env)->GetByteArrayRegion(env, bytes, 0, size, (jbyte *)buffer);
+    size_t offset = 0;
+    while (offset < (size_t)size) {
+        pthread_mutex_lock(&active_lock);
+        bool valid = !active_done && active_run_id == (unsigned)handle && active_stdin >= 0;
+        pthread_mutex_unlock(&active_lock);
+        if (!valid || run_was_canceled((unsigned)handle)) break;
+        ssize_t n = write(fd, buffer + offset, (size_t)size - offset);
+        if (n > 0) { offset += (size_t)n; continue; }
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { struct pollfd wait_fd = {fd, POLLOUT, 0}; poll(&wait_fd, 1, 20); continue; }
+        break;
+    }
+    free(buffer); close(fd);
+    return offset == (size_t)size ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_doge_ide_NativeWasmRunner_closeInput(JNIEnv *env, jclass unused, jlong handle) {
+    (void)env; (void)unused;
+    pthread_mutex_lock(&active_lock);
+    if (!active_done && active_run_id == (unsigned)handle && active_stdin >= 0) { close(active_stdin); active_stdin = -1; }
+    pthread_mutex_unlock(&active_lock);
+}
+
+JNIEXPORT void JNICALL
+Java_com_doge_ide_NativeWasmRunner_cancelRun(JNIEnv *env, jclass unused, jlong handle) {
+    (void)env; (void)unused;
+    pthread_mutex_lock(&active_lock);
+    bool valid = !active_done && active_run_id == (unsigned)handle;
+    pthread_mutex_unlock(&active_lock);
+    if (valid) {
+        atomic_store_explicit(&cancel_upto, (unsigned)handle, memory_order_release);
+        terminate_active((unsigned)handle);
+    }
 }
 
 JNIEXPORT void JNICALL

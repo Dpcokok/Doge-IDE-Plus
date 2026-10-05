@@ -71,6 +71,13 @@ final class DependencyManager {
 package com.doge.ide;
 final class NativeWasmRunner {
     static void cancel() {}
+    static boolean writeInput(long handle, byte[] bytes) { return true; }
+    static void closeInput(long handle) {}
+    static void cancelRun(long handle) {}
+    static String runInteractive(byte[] wasm, int timeout, RunSession session) {
+        session.output("running", "WASI prompt:", "");
+        return run(wasm, new byte[0], timeout);
+    }
     static String run(byte[] wasm, byte[] input, int timeout) {
         return "{\"status\":\"success\",\"stdout\":\"\",\"stderr\":\"\",\"exit_code\":0}";
     }
@@ -105,6 +112,7 @@ public class JSONObject {
         return x == null || x.isJsonNull() ? fallback : x.isJsonPrimitive() ? x.getAsString() : x.toString();
     }
     public int optInt(String key, int fallback) { try { return value.get(key).getAsInt(); } catch (Exception e) { return fallback; } }
+    public long optLong(String key, long fallback) { try { return value.get(key).getAsLong(); } catch (Exception e) { return fallback; } }
     public boolean optBoolean(String key, boolean fallback) { try { return value.get(key).getAsBoolean(); } catch (Exception e) { return fallback; } }
     public JSONObject optJSONObject(String key) { JsonElement x = value.get(key); return x != null && x.isJsonObject() ? new JSONObject(x.getAsJsonObject()) : null; }
     public JSONArray optJSONArray(String key) { JsonElement x = value.get(key); return x != null && x.isJsonArray() ? new JSONArray(x.getAsJsonArray()) : null; }
@@ -142,7 +150,7 @@ public class JSONArray {
     if ($LASTEXITCODE -ne 0) { throw 'Child-process fixture compilation failed.' }
     $sourcePaths = @(Get-ChildItem -LiteralPath $work -Filter '*.java' | ForEach-Object FullName)
     $sourcePaths += Join-Path $PSScriptRoot 'RuntimeRegression.java'
-    foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'ClangdService.java', 'RuntimeCompat.java', 'LocalServer.java') {
+    foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'RunSession.java', 'ClangdService.java', 'RuntimeCompat.java', 'LocalServer.java') {
         $sourcePaths += Join-Path $repoRoot "android/app/src/main/java/com/doge/ide/$name"
     }
     & $javac -encoding UTF-8 --release 17 -classpath $gson -d (Join-Path $work 'classes') @sourcePaths

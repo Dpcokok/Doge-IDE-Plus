@@ -40,6 +40,10 @@ final class LocalCompiler {
     String execute(String requestJson) { return execute(requestJson, (phase, stdout, stderr) -> {}); }
 
     String execute(String requestJson, ProgressListener listener) {
+        return execute(requestJson, listener, null);
+    }
+
+    String execute(String requestJson, ProgressListener listener, RunSession session) {
         try {
             JSONObject request = new JSONObject(requestJson);
             String language = request.optString("language", "");
@@ -53,6 +57,9 @@ final class LocalCompiler {
             String stdin = request.optString("stdin", "");
             JSONObject build = request.optJSONObject("build");
             int timeout = Math.max(1000, Math.min(30000, request.optInt("timeout_ms", 30000)));
+            boolean interactive = session != null && session.interactive;
+            if (interactive) timeout = Math.max(1000, Math.min(120000, request.optInt("compile_timeout_ms", 30000)));
+            int runTimeout = Math.max(1000, Math.min(3600000, request.optInt("run_timeout_ms", 600000)));
             long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
             if (!"c".equals(language) && !"cpp".equals(language)) {
                 return error("invalid_request", "仅支持 C 和 C++");
@@ -87,6 +94,7 @@ final class LocalCompiler {
             boolean entryFound = false;
             try {
             for (int i = 0; i < files.length(); i++) {
+                if (session != null && session.isCanceled()) return result("canceled", "", "任务已取消", -1);
                 JSONObject file = files.optJSONObject(i);
                 if (file == null) continue;
                 String relative = file.optString("path", "").replace('\\', '/');
@@ -143,13 +151,29 @@ final class LocalCompiler {
             }
             if (objects.isEmpty()) return error("invalid_request", "项目中没有 C/C++ 源文件");
 
+            if (interactive) {
+                File helper = new File(work, ".doge-terminal.c"), helperObject = new File(work, ".doge-terminal.o");
+                // WASI crt1 calls __main_void (which dispatches argc/argv main when necessary), not main.
+                RuntimeCompat.writeBytes(helper, ("#include <stdio.h>\nextern int __real___main_void(void);\n"
+                        + "int __wrap___main_void(void){setvbuf(stdout,0,_IONBF,0);setvbuf(stderr,0,_IONBF,0);return __real___main_void();}\n").getBytes(StandardCharsets.UTF_8));
+                ProcessBuilder helperCompiler = new ProcessBuilder(clang.getAbsolutePath(), "--target=" + target,
+                        "--sysroot=" + sysroot.getAbsolutePath(), "-c", helper.getAbsolutePath(), "-o", helperObject.getAbsolutePath());
+                configureEnvironment(helperCompiler, toolchain, work);
+                ProcessResult helperResult = runProcess(helperCompiler, remainingMillis(deadlineNanos), (out, err) -> listener.onUpdate("compiling", out, err));
+                if (!helperResult.finished) return result("timeout", "", "终端初始化编译超时", -1);
+                if (helperResult.exitCode != 0) return result("compile_error", "", helperResult.stderr, helperResult.exitCode);
+                objects.add(helperObject);
+            }
+
             File linker = new File(toolchain, "bin/wasm-ld");
-            listener.onUpdate("linking", "", compileError.toString());
+            if (session != null && session.isCanceled()) return result("canceled", "", "任务已取消", -1);
+            listener.onUpdate("linking", "", "");
             File wasiLib = new File(sysroot, "lib/wasm32-wasip1");
             File crt = new File(wasiLib, "crt1-command.o");
             File builtins = new File(toolchain, "lib/clang/21/lib/wasm32-wasip1/libclang_rt.builtins.a");
             java.util.ArrayList<String> linkArgs = new java.util.ArrayList<>();
             linkArgs.add(linker.getAbsolutePath()); linkArgs.add("--entry=_start");
+            if (interactive) linkArgs.add("--wrap=__main_void");
             for (File object : objects) linkArgs.add(object.getAbsolutePath());
             linkArgs.add(crt.getAbsolutePath()); linkArgs.add("-L" + wasiLib.getAbsolutePath());
             if ("cpp".equals(effectiveLanguage)) {
@@ -160,20 +184,24 @@ final class LocalCompiler {
             applyLinkOptions(linkArgs, build, work, sysroot, dependencies);
             ProcessBuilder link = new ProcessBuilder(linkArgs);
             configureEnvironment(link, toolchain, work);
-            listener.onUpdate("linking", "", compileError.toString());
+            listener.onUpdate("linking", "", "");
             ProcessResult linked = runProcess(link, remainingMillis(deadlineNanos), (out, err) -> {
-                if (!err.isEmpty()) listener.onUpdate("linking", out, compileError.toString() + err);
+                if (!err.isEmpty() || !out.isEmpty()) listener.onUpdate("linking", out, err);
             });
             if (!linked.finished) return result("timeout", "", "链接超时", -1);
             compileError.append(linked.stderr);
             if (linked.exitCode != 0 || !wasm.isFile()) return result("compile_error", "", compileError.toString(), linked.exitCode);
-            listener.onUpdate("running", "", compileError.toString());
-            String run = NativeWasmRunner.run(RuntimeCompat.readBytes(wasm), stdin.getBytes(StandardCharsets.UTF_8), remainingMillis(deadlineNanos));
+            listener.onUpdate("running", "", "");
+            String run = interactive
+                    ? NativeWasmRunner.runInteractive(RuntimeCompat.readBytes(wasm), runTimeout, session)
+                    : NativeWasmRunner.run(RuntimeCompat.readBytes(wasm), stdin.getBytes(StandardCharsets.UTF_8), remainingMillis(deadlineNanos));
             trimBuildCache();
             JSONObject response = new JSONObject(run);
+            if (interactive) response.put("output_complete", true);
             response.put("compile_stderr", compileError.toString());
             return response.toString();
             } finally {
+                if (session != null) session.closeInput();
                 deleteTree(work);
             }
         } catch (TimeoutException e) {
