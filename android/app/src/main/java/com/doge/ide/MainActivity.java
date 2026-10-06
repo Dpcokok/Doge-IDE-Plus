@@ -441,7 +441,7 @@ public class MainActivity extends Activity {
             if (listed != null) {
                 for (int i = 0; i < listed.length(); i++) {
                     String path = listed.optString(i, "");
-                    if (!isSafeProjectPath(path) || PROJECT_MANIFEST.equals(path) || added.contains(path)) continue;
+                    if (!isSafeProjectPath(path) || ProjectFiles.isInternalManifestPath(path) || added.contains(path)) continue;
                     String code = scanned.get(path);
                     if (code == null) continue;
                     files.put(new JSONObject().put("path", path).put("code", code));
@@ -450,7 +450,7 @@ public class MainActivity extends Activity {
             }
         }
         for (Map.Entry<String, String> entry : scanned.entrySet()) {
-            if (added.contains(entry.getKey())) continue;
+            if (ProjectFiles.isInternalManifestPath(entry.getKey()) || added.contains(entry.getKey())) continue;
             files.put(new JSONObject().put("path", entry.getKey()).put("code", entry.getValue()));
         }
             JSONObject project = new JSONObject();
@@ -526,7 +526,8 @@ public class MainActivity extends Activity {
         for (int i = 0; i < files.length(); i++) {
             JSONObject file = files.optJSONObject(i); if (file == null) continue;
             String path = file.optString("path", "").replace('\\', '/');
-            if (!isSafeProjectPath(path) || PROJECT_MANIFEST.equals(path)) throw new IOException("文件路径无效: " + path);
+            if (ProjectFiles.isInternalManifestPath(path)) continue;
+            if (!isSafeProjectPath(path)) throw new IOException("文件路径无效: " + path);
             currentPaths.add(path);
             String[] parts = path.split("/");
             String parentId = rootId;
@@ -568,7 +569,7 @@ public class MainActivity extends Activity {
         if (previousFiles != null) {
             for (int i = 0; i < previousFiles.length(); i++) {
                 String oldPath = previousFiles.optString(i, "");
-                if (!isSafeProjectPath(oldPath) || currentPaths.contains(oldPath)) continue;
+                if (!isSafeProjectPath(oldPath) || ProjectFiles.isInternalManifestPath(oldPath) || currentPaths.contains(oldPath)) continue;
                 try {
                     String oldId = findDocumentByPath(tree, oldPath, rootId);
                     if (oldId != null) DocumentsContract.deleteDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, oldId));
@@ -669,7 +670,7 @@ public class MainActivity extends Activity {
     }
 
     private static boolean isSafeName(String name) { return name != null && !name.isEmpty() && !".".equals(name) && !"..".equals(name) && !name.contains("/") && !name.contains("\\"); }
-    private static boolean isSourceFile(String name) { return name.matches("(?i).+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx|py|txt|json|csv|md)"); }
+    private static boolean isSourceFile(String name) { return !ProjectFiles.isInternalManifestPath(name) && name.matches("(?i).+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx|py|txt|json|csv|md)"); }
     private static boolean isSafeProjectPath(String path) { return path != null && path.matches("[A-Za-z0-9._/-]+") && !path.startsWith("/") && !path.contains("..") && !path.endsWith("/"); }
 
     /** 资源包导入：按 manifest.kind 安装到 files/toolchain（C/C++，旧包无 kind）或 files/python。返回 kind。 */

@@ -98,6 +98,7 @@ final class LocalCompiler {
                 JSONObject file = files.optJSONObject(i);
                 if (file == null) continue;
                 String relative = file.optString("path", "").replace('\\', '/');
+                if (ProjectFiles.isInternalManifestPath(relative)) continue;
                 if (!relative.matches("[A-Za-z0-9._/-]+") || relative.startsWith("/") || relative.contains("..") || relative.startsWith(".") || relative.endsWith("/")) {
                     return error("invalid_request", "项目文件路径无效: " + relative);
                 }
@@ -114,6 +115,7 @@ final class LocalCompiler {
                 JSONObject file = files.optJSONObject(i);
                 if (file == null) continue;
                 String relative = file.optString("path", "").replace('\\', '/');
+                if (ProjectFiles.isInternalManifestPath(relative)) continue;
                 String lower = relative.toLowerCase(java.util.Locale.ROOT);
                 File projectFile = safeChild(work, relative);
                 if (!lower.endsWith(".c") && !lower.endsWith(".cc") && !lower.endsWith(".cpp") && !lower.endsWith(".cxx")) continue;

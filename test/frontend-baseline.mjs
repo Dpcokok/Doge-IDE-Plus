@@ -290,6 +290,7 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
     const updateEditorAvailability = () => {}, showToast = () => {}, document = { getElementById: () => ({}) };
     const projectError = message => { throw new Error(message); };
     ${extractFn('languageForPath')}
+    ${['isProjectManifestPath','normalizeProjectFiles'].filter(name => new RegExp('function ' + name + '\\(').test(html)).map(extractFn).join('\n')}
     ${callback}
     return loaded => { window.projectOpened(loaded); return project.language; };
   `)();
@@ -298,6 +299,39 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
   eq('project-open: C++ 语言不受首个数据文件影响', openLanguage({ language:'cpp', files:[{path:'config.json'},{path:'main.cpp'}] }), 'cpp');
   eq('project-open: 没有清单语言时按 .py 推断', openLanguage({ files:[{path:'main.py'}] }), 'python');
   eq('project-open: 未知语言按文件推断', openLanguage({ language:'unknown', files:[{path:'main.cpp'}] }), 'cpp');
+}
+{
+  const helpers = ['isProjectManifestPath','normalizeProjectFiles'].filter(name => new RegExp('function ' + name + '\\(').test(html)).map(extractFn).join('\n');
+  const callback = html.match(/window\.projectOpened = function\([^)]*\) \{[\s\S]*?\n\};/)[0];
+  const probe = new Function('saved', `
+    let project={files:[]},currentLang='c',currentFilePath='.doge-project.json',persisted;
+    const window={},editor=null,pendingDiskSave=false;
+    const getLang=id=>({id}),getProjectFile=path=>project.files.find(file=>file.path===path);
+    const localStorage={getItem:()=>JSON.stringify(saved)};
+    const ensureBuildModel=()=>{},persistProject=()=>{persisted=JSON.parse(JSON.stringify(project));};
+    const closeCreateProject=()=>{},resetEditorSession=()=>{},saveProject=persistProject;
+    const updateEditorAvailability=()=>{},showToast=()=>{},document={getElementById:()=>({})};
+    const projectError=message=>{throw Error(message);};
+    ${helpers}
+    ${extractFn('projectStorageKey')}
+    ${extractFn('languageForPath')}
+    ${extractFn('loadProject')}
+    ${callback}
+    loadProject();
+    const draft={files:project.files.map(f=>f.path),entry:currentFilePath,persisted:persisted&&persisted.files.map(f=>f.path)};
+    window.projectOpened(saved);
+    return {draft,opened:project.files.map(f=>f.path)};
+  `);
+  for (const language of ['python','c','cpp']) {
+    const entry=language==='python'?'main.py':language==='cpp'?'main.cpp':'main.c';
+    const saved={language,files:[{path:'.doge-project.json',code:'{}'},{path:entry,code:'sample'},
+      {path:'config.json',code:'{}'},{path:'nested/.doge-project.json',code:'{}'},{path:'NESTED/.DOGE-PROJECT.JSON',code:'{}'}]};
+    const result=probe(saved);
+    eq('manifest: '+language+' 重开项目排除内部清单',result.opened,[entry,'config.json']);
+    eq('manifest: '+language+' 旧草稿排除内部清单',result.draft.files,[entry,'config.json']);
+    eq('manifest: '+language+' 旧草稿恢复到用户入口',result.draft.entry,entry);
+    eq('manifest: '+language+' 修正结果写回旧草稿',result.draft.persisted,[entry,'config.json']);
+  }
 }
 {
   const languages = html.match(/const LANGUAGES = \[[\s\S]*?\n\];/)[0];

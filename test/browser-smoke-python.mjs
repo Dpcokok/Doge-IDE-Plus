@@ -45,6 +45,23 @@ try {
     finally{window.fetch=original;}
   })()`);
   eq('auth: 浏览器 API 请求携带原生会话令牌', auth, {token:'fixture-token',contentType:'application/json'});
+  // Reopening a directory used to import the app's own JSON manifest as a data file.
+  for (const language of ['python','c','cpp']) {
+    const entry=language==='python'?'main.py':language==='cpp'?'main.cpp':'main.c';
+    await ev(`window.projectOpened({name:'Reopened',language:${JSON.stringify(language)},files:[
+      {path:'.doge-project.json',code:'{"format":1}'},{path:${JSON.stringify(entry)},code:'sample'},
+      {path:'config.json',code:'{"value":42}'},{path:'nested/.doge-project.json',code:'{"format":1}'}]});true`);
+    eq('reopen: '+language+' 仅保留用户源码和数据文件',await ev('project.files.map(f=>f.path)'),[entry,'config.json']);
+    eq('reopen: '+language+' 首个文件选择用户入口',await ev('currentFilePath'),entry);
+    await ev('window.savedRequests=[];saveProjectToDisk();true');
+    eq('save: '+language+' 保存请求不包含内部清单',await ev('savedRequests[0].files.map(f=>f.path)'),[entry,'config.json']);
+    await ev('window.projectSaveResult(true,"");true');
+  }
+  await ev(`localStorage.setItem(projectStorageKey(),JSON.stringify({name:'OldDraft',language:'python',files:[
+    {path:'.doge-project.json',code:'{}'},{path:'main.py',code:'print(42)'},{path:'config.json',code:'{}'}]}));true`);
+  await browser.reload();
+  eq('draft: 重启时清理旧缓存中的清单文件',await ev('project.files.map(f=>f.path)'),['main.py','config.json']);
+  eq('draft: 清理结果写回草稿存储',await ev('JSON.parse(localStorage.getItem(projectStorageKey())).files.map(f=>f.path)'),['main.py','config.json']);
   await sleep(100);
   ok('无 JavaScript 错误 (' + browser.errors.join('; ') + ')', browser.errors.length === 0);
 } finally { await browser.close(); }

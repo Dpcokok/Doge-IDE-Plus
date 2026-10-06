@@ -15,6 +15,12 @@ $work = Join-Path $tempRoot ('doge-runtime-test-' + [guid]::NewGuid().ToString('
 New-Item -ItemType Directory -Path $work | Out-Null
 try {
     $sources = @{}
+    # Compile the exact production scan predicate, so the regression covers the
+    # rule used by SAF directory scanning without requiring an Android provider.
+    $activitySource = [IO.File]::ReadAllText((Join-Path $repoRoot 'android/app/src/main/java/com/doge/ide/MainActivity.java'))
+    $scanPredicate = [regex]::Match($activitySource, 'private static boolean isSourceFile\(String name\)\s*\{[^\r\n]*\}').Value
+    if (-not $scanPredicate) { throw 'Project scan predicate was not found.' }
+    $sources['ProjectScanPolicy.java'] = 'package com.doge.ide; final class ProjectScanPolicy { ' + $scanPredicate.Replace('private static', 'static') + ' }'
     $sources['Context.java'] = @'
 package android.content;
 import java.io.File;
@@ -150,7 +156,7 @@ public class JSONArray {
     if ($LASTEXITCODE -ne 0) { throw 'Child-process fixture compilation failed.' }
     $sourcePaths = @(Get-ChildItem -LiteralPath $work -Filter '*.java' | ForEach-Object FullName)
     $sourcePaths += Join-Path $PSScriptRoot 'RuntimeRegression.java'
-    foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'RunSession.java', 'ClangdService.java', 'RuntimeCompat.java', 'LocalServer.java') {
+    foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'RunSession.java', 'ClangdService.java', 'RuntimeCompat.java', 'LocalServer.java', 'ProjectFiles.java') {
         $sourcePaths += Join-Path $repoRoot "android/app/src/main/java/com/doge/ide/$name"
     }
     & $javac -encoding UTF-8 --release 17 -classpath $gson -d (Join-Path $work 'classes') @sourcePaths

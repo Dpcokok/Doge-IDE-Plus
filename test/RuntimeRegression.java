@@ -421,8 +421,53 @@ public final class RuntimeRegression {
         if (args[1].equals("cache") || args[1].equals("all")) cacheTests(Path.of(args[0], "RuntimeChild.exe"));
         if (args[1].equals("server") || args[1].equals("all")) serverSecurityTests();
         if (args[1].equals("session") || args[1].equals("all")) sessionTests(runner);
-        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "server", "session", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("manifest") || args[1].equals("all")) manifestTests(runner, Path.of(args[0], "RuntimeChild.exe"));
+        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "server", "session", "manifest", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
+    }
+
+    private static void manifestTests(PythonRunner runner, Path child) throws Exception {
+        check("directory scan excludes the internal project JSON", !ProjectScanPolicy.isSourceFile(".doge-project.json"));
+        check("directory scan excludes case variants of the internal project JSON", !ProjectScanPolicy.isSourceFile(".DOGE-PROJECT.JSON"));
+        check("directory scan retains user JSON data", ProjectScanPolicy.isSourceFile("config.json"));
+        for(String source:new String[]{"main.py","main.c","main.cpp"}) check("directory scan retains "+source, ProjectScanPolicy.isSourceFile(source));
+        check("metadata recognition handles nested paths", ProjectFiles.isInternalManifestPath("nested/.doge-project.json") && ProjectFiles.isInternalManifestPath("nested\\.DOGE-PROJECT.JSON"));
+        check("metadata recognition cannot bypass traversal checks", !ProjectFiles.isInternalManifestPath("../.doge-project.json") && !ProjectFiles.isInternalManifestPath("/.doge-project.json"));
+        JSONObject request = pythonRequest("main.py",3000,"");
+        JSONArray files = request.optJSONArray("files");
+        files.put(new JSONObject().put("path",".doge-project.json").put("code","{\"format\":1}"))
+                .put(new JSONObject().put("path","nested/.doge-project.json").put("code","{}"))
+                .put(new JSONObject().put("path","config.json").put("code","{\"value\":42}"));
+        JSONObject result = new JSONObject(runner.execute(request.toString(),(p,o,e)->{}));
+        check("Python runs old project requests containing internal manifests", "success".equals(result.optString("status")));
+        if (!"success".equals(result.optString("status"))) System.out.println("REPRO Python: "+result);
+
+        File projectRoot=new File(root,"manifest-compiler");
+        write(projectRoot,"toolchain/manifest.json","{\"clang\":\"bin/clang\",\"sysroot\":\"wasi-sysroot\"}");
+        new File(projectRoot,"toolchain/bin").mkdirs();
+        new File(projectRoot,"toolchain/wasi-sysroot").mkdirs();
+        for(String binary:new String[]{"clang","clang++","wasm-ld"}) Files.copy(child,new File(projectRoot,"toolchain/bin/"+binary).toPath());
+        LocalCompiler compiler=new LocalCompiler(new Context(projectRoot));
+        for(String language:new String[]{"c","cpp"}) {
+            String entry="main."+language;
+            files=new JSONArray().put(new JSONObject().put("path",entry).put("code","int main(){return 0;}"))
+                    .put(new JSONObject().put("path",".doge-project.json").put("code","{}"))
+                    .put(new JSONObject().put("path","config.json").put("code","{}"));
+            request=new JSONObject().put("language",language).put("entry",entry).put("files",files);
+            result=new JSONObject(compiler.execute(request.toString()));
+            check(language+" runs old project requests containing an internal manifest","success".equals(result.optString("status")));
+            if(!"success".equals(result.optString("status"))) System.out.println("REPRO "+language+": "+result);
+        }
+        request=pythonRequest("main.py",3000,"");
+        request.optJSONArray("files").put(new JSONObject().put("path","../outside.py").put("code","pass"));
+        check("Python still rejects traversal paths","invalid_request".equals(new JSONObject(runner.execute(request.toString(),(p,o,e)->{})).optString("status")));
+        for(String language:new String[]{"c","cpp"}) {
+            String entry="main."+language;
+            request=new JSONObject().put("language",language).put("entry",entry).put("files",new JSONArray()
+                    .put(new JSONObject().put("path",entry).put("code","int main(){return 0;}"))
+                    .put(new JSONObject().put("path","../.doge-project.json").put("code","{}")));
+            check(language+" still rejects traversal disguised as metadata","invalid_request".equals(new JSONObject(compiler.execute(request.toString())).optString("status")));
+        }
     }
 }

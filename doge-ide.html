@@ -3251,18 +3251,33 @@ function syncCurrentFile() {
   saveProject();
 }
 function projectStorageKey() { return 'doge-ide-project-v1'; }
+function isProjectManifestPath(path) {
+  if (typeof path !== 'string') return false;
+  const normalized = path.replace(/\\/g, '/');
+  return /^[A-Za-z0-9._/-]+$/.test(normalized) && !normalized.startsWith('/') && !normalized.includes('..')
+    && normalized.slice(normalized.lastIndexOf('/') + 1).toLowerCase() === '.doge-project.json';
+}
+function normalizeProjectFiles(files) {
+  const unique = new Set();
+  return files.filter(file => {
+    if (!file || typeof file.path !== 'string' || !file.path || isProjectManifestPath(file.path) || unique.has(file.path)) return false;
+    unique.add(file.path);
+    return true;
+  });
+}
 function loadProject() {
   try {
     const saved = JSON.parse(localStorage.getItem(projectStorageKey()) || 'null');
     if (saved && Array.isArray(saved.files)) project = saved;
   } catch (e) {}
-  const unique = new Map();
-  project.files = project.files.filter(file => file && typeof file.path === 'string' && file.path && !unique.has(file.path) && unique.set(file.path, true));
+  const previousCount = project.files.length;
+  project.files = normalizeProjectFiles(project.files);
   if (project.files.length && !getProjectFile(currentFilePath)) currentFilePath = project.files[0].path;
   if (!project.files.length) currentFilePath = '';
   project.language = ['c', 'cpp', 'python'].includes(project.language) ? project.language : languageForPath(currentFilePath).id;
   currentLang = project.language;
   ensureBuildModel();
+  if (project.files.length !== previousCount) persistProject();
 }
 function ensureBuildModel() {
   if (!project.buildProfiles || typeof project.buildProfiles !== 'object') project.buildProfiles = {};
@@ -3374,6 +3389,7 @@ window.projectOpened = function(serialized) {
     const loaded = typeof serialized === 'string' ? JSON.parse(serialized) : serialized;
     if (!loaded || !Array.isArray(loaded.files)) throw new Error('项目数据无效');
     project = loaded;
+    project.files = normalizeProjectFiles(project.files);
     project.language = ['c', 'cpp', 'python'].includes(project.language) ? project.language : (project.files.length ? languageForPath(project.files[0].path).id : 'c');
     currentLang = project.language;
     // 目录里的内容就是已保存的基线
