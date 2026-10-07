@@ -314,6 +314,7 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
     const window = {}, editor = null, pendingDiskSave = false;
     const getLang = id => ({ id });
     const closeCreateProject = () => {}, resetEditorSession = () => {}, saveProject = () => {};
+    const finishEditorComposition = () => {};
     const updateEditorAvailability = () => {}, showToast = () => {}, document = { getElementById: () => ({}) };
     const projectError = message => { throw new Error(message); };
     ${extractFn('languageForPath')}
@@ -337,6 +338,7 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
     const localStorage={getItem:()=>JSON.stringify(saved)};
     const ensureBuildModel=()=>{},persistProject=()=>{persisted=JSON.parse(JSON.stringify(project));};
     const closeCreateProject=()=>{},resetEditorSession=()=>{},saveProject=persistProject;
+    const finishEditorComposition=()=>{};
     const updateEditorAvailability=()=>{},showToast=()=>{},document={getElementById:()=>({})};
     const projectError=message=>{throw Error(message);};
     ${helpers}
@@ -371,6 +373,7 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
     const isRunning = false, BP_GUTTER = 'bp', editorHint = () => {};
     const getProjectFile = p => project.files.find(file => file.path === p);
     const noop = () => {}, clearTimeout = noop, setTimeout = noop, applyEditorPreferences = noop, editorBracketOptions=()=>true;
+    const finishEditorComposition = noop, bindEditorInputContinuity = noop;
     const buildTabs = noop, loadBreakpoints = noop, loadSavedHashes = noop, loadOpenFiles = noop;
     const renderEditorTabs = noop, renderBreakpoints = noop, bindBracketInput = noop, bindAutoComplete = noop, bindRichCopy = noop, updateEditorAvailability = noop;
     const scheduleLint = noop, persistOpenFiles = noop, updateLangInfo = noop, renderProjectFiles = noop, saveCurrentFile = noop, requestClangdDiagnostics = noop;

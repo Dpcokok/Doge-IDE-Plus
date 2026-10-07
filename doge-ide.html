@@ -1674,12 +1674,15 @@ function bindAutoComplete() {
   input.addEventListener('compositionend', () => {
     if (!tabDuringCompose) return;
     tabDuringCompose = false;
+    const doc = editor.getDoc();
     setTimeout(() => {
+      if (editor.getDoc() !== doc || !editor.hasFocus()) return;
       const cs = editor.state.completionActive;
       if (cs && typeof cs.update === 'function') cs.update();
-      setTimeout(() => acceptCompletion(editor), 30);
+      setTimeout(() => { if (editor.getDoc() === doc && editor.hasFocus()) acceptCompletion(editor); }, 30);
     }, 0);
   });
+  input.addEventListener('blur', () => { tabDuringCompose = false; });
   editor.on('beforeChange', (cm, change) => {
     if (change.origin !== '+input' && change.origin !== '*compose') return;
     if (!change.text || change.text.length !== 1 || !change.update) return;
@@ -1688,9 +1691,11 @@ function bindAutoComplete() {
     if (!m || !hintWidgetOpen(cm)) return;
     // 输入法可能把“最后一个字母 + \t”一起送来：先让字母进去，再接受
     const rest = m[1];
-    change.cancel();
+    if (rest) change.update(change.from, change.to, [rest]);
+    else change.cancel();
+    const doc = cm.getDoc();
     setTimeout(() => {
-      if (rest) cm.replaceRange(rest, cm.getCursor(), cm.getCursor(), '+input');
+      if (cm.getDoc() !== doc || !cm.hasFocus()) return;
       const cs = cm.state.completionActive;
       if (cs && typeof cs.update === 'function' && rest) cs.update();
       acceptCompletion(cm) || cm.execCommand('insertTab');
@@ -2321,11 +2326,18 @@ function addScrim() {
   sc.addEventListener('pointerdown', closeLayer);
   layer.appendChild(sc);
 }
+let palettePreviousFocus = null;
 function closeLayer() {
   const layer = document.getElementById('layer');
   if (!layer) return;
+  const restore = layer.dataset.kind === 'palette' && layer.contains(document.activeElement);
+  const previousFocus = palettePreviousFocus;
+  palettePreviousFocus = null;
   layer.innerHTML = ''; layer.dataset.kind = '';
   document.querySelectorAll('.menu-btn').forEach(x => x.setAttribute('aria-expanded', 'false'));
+  if (restore && previousFocus && document.contains(previousFocus)) {
+    try { previousFocus.focus({preventScroll:true}); } catch (e) { previousFocus.focus(); }
+  }
 }
 function layerOpen() {
   const layer = document.getElementById('layer');
@@ -2335,6 +2347,7 @@ function layerOpen() {
 // 命令面板
 function openCommandPalette() {
   closeLayer();
+  palettePreviousFocus = document.activeElement;
   const layer = document.getElementById('layer');
   layer.dataset.kind = 'palette';
   const box = document.createElement('div');
@@ -2783,6 +2796,7 @@ function docFor(path) {
 // 没有打开任何文件时换上一个空文档，避免编辑器残留上一个文件的内容
 function swapToEmptyDoc() {
   if (!editor) return;
+  finishEditorComposition(editor);
   const lang = projectLang();
   switchingProjectFile = true;
   try { editor.swapDoc(CodeMirror.Doc('', lang.mode)); } finally { switchingProjectFile = false; }
@@ -3280,6 +3294,7 @@ function initEditor() {
     if (gutter === BP_GUTTER) toggleBreakpoint(line);
   });
   renderBreakpoints();
+  bindEditorInputContinuity();
   bindBracketInput();
   bindAutoComplete();
   bindRichCopy();
@@ -3467,6 +3482,7 @@ window.projectOpened = function(serialized) {
   try {
     const loaded = typeof serialized === 'string' ? JSON.parse(serialized) : serialized;
     if (!loaded || !Array.isArray(loaded.files)) throw new Error('项目数据无效');
+    finishEditorComposition(editor);
     project = loaded;
     project.files = normalizeProjectFiles(project.files);
     project.language = ['c', 'cpp', 'python'].includes(project.language) ? project.language : (project.files.length ? languageForPath(project.files[0].path).id : 'c');
@@ -3653,6 +3669,7 @@ function switchProjectFile(path) {
   if (isRunning || (path === currentFilePath && editor)) return;
   const file = getProjectFile(path);
   if (!file) return;
+  finishEditorComposition(editor);
   saveCurrentFile();
   // 旧文件的诊断/补全请求不再需要
   if (editor) { clearTimeout(editor._clangdTimer); editor.closeHint && editor.closeHint(); }
@@ -5085,6 +5102,26 @@ window.toolchainProgress = function(percent, message) {
   startImportWatchdog();
 };
 
+function finishEditorComposition(cm) {
+  if (!cm || !cm.display.input.composing) return;
+  // Use CodeMirror's own composition-end handler to flush and clear its marked range.
+  cm.getInputField().dispatchEvent(new CompositionEvent('compositionend', {bubbles:true}));
+}
+function bindEditorInputContinuity() {
+  const cm = editor, input = cm.getInputField();
+  input.addEventListener('blur', () => finishEditorComposition(cm), true);
+  input.addEventListener('input', event => {
+    const bridge = cm.display.input;
+    if (event.isComposing || bridge.composing || cm.isReadOnly() || !cm.hasFocus() || cm.somethingSelected()) return;
+    if (bridge.contextMenuPending || cm.display.selForContextMenu || cm.getOption('disableInput') || cm.state.keySeq) return;
+    // TextareaInput.poll skips native selected text when prevInput is empty.
+    // Once IME text is committed, that hidden selection must not block the document update.
+    if (bridge.prevInput === '' && input.value && input.selectionStart !== input.selectionEnd) {
+      input.setSelectionRange(input.value.length, input.value.length);
+      bridge.poll();
+    }
+  });
+}
 function bindBracketInput() {
   const cm = editor, input = cm.getInputField();
   const pairs = {'(':')','[':']','{':'}'};
@@ -5109,8 +5146,11 @@ function bindBracketInput() {
   input.addEventListener('compositionstart',() => {composing=true;pending=null;});
   input.addEventListener('compositionend',() => {
     composing=false;
-    setTimeout(() => {const change=pending;pending=null;complete(change);},0);
+    const change=pending, doc=cm.getDoc();pending=null;
+    setTimeout(() => {if (cm.getDoc()===doc && cm.hasFocus()) complete(change);},0);
   });
+  input.addEventListener('blur',() => {composing=false;pending=null;});
+  cm.on('swapDoc',() => {composing=false;pending=null;});
   cm.on('beforeChange',(instance,change) => {
     if (composing || !cm.getOption('autoCloseBrackets') || cm.getOption('readOnly') || cm.listSelections().length !== 1) return;
     if (change.origin !== '+input' || change.text.length !== 1 || !pairs[change.text[0]]) return;
