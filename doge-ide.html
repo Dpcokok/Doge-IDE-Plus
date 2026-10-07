@@ -176,6 +176,9 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .cm-s-doge .cm-meta{color:var(--ed-meta)}
 .cm-s-doge .cm-error{color:var(--ed-error)}
 .cm-s-doge .cm-doge-undefined{text-decoration:underline wavy var(--ed-error);text-decoration-skip-ink:none}
+.cm-s-doge .cm-doge-fullwidth{text-decoration:underline wavy var(--ed-error);text-decoration-skip-ink:none;color:var(--ed-error)}
+.cm-s-doge.CodeMirror pre.CodeMirror-line,.cm-s-doge.CodeMirror pre.CodeMirror-line-like,.cm-s-doge.CodeMirror .CodeMirror-line span{font-variant-ligatures:none;font-feature-settings:"calt" 0,"liga" 0}
+.cm-s-doge.CodeMirror.doge-symbol-ligatures pre.CodeMirror-line,.cm-s-doge.CodeMirror.doge-symbol-ligatures pre.CodeMirror-line-like,.cm-s-doge.CodeMirror.doge-symbol-ligatures .CodeMirror-line span{font-variant-ligatures:contextual;font-feature-settings:"calt" 1,"liga" 1}
 .cm-s-doge .cm-punctuation{color:var(--ed-fg)}
 .cm-s-doge .cm-bracket{color:var(--ed-fg)}
 .cm-s-doge .cm-tag{color:var(--ed-var2)}
@@ -788,8 +791,20 @@ body.kb-open .explorer-scrim{bottom:0}
       </div>
       <div class="settings-group">编辑</div>
       <div class="settings-row">
+        <label class="settings-check"><input type="checkbox" id="autoCloseBracketsInput" checked>自动补齐括号</label>
+        <div class="hint">输入 (、[、{ 时补齐右括号；支持选中文本包裹和空括号成对删除</div>
+      </div>
+      <div class="settings-row">
         <label class="settings-check"><input type="checkbox" id="autoCompleteInput" checked>输入时自动弹出补全</label>
         <div class="hint">输入两个字母，或输入 .、->、::、#include 时自动提示；关闭后仍可用 Ctrl+Space 或 编辑 → 代码补全</div>
+      </div>
+      <div class="settings-row">
+        <label class="settings-check"><input type="checkbox" id="symbolLigaturesInput">启用符号合并</label>
+        <div class="hint">只改变编辑器显示，不修改源码；例如 >=、<=、-> 等符号由字体合并显示</div>
+      </div>
+      <div class="settings-row">
+        <label class="settings-check"><input type="checkbox" id="fullwidthSymbolLintInput" checked>检查全角符号</label>
+        <div class="hint">代码中的中文全角标点和运算符会标红；字符串和注释中的中文内容不提示</div>
       </div>
       <div class="settings-group">运行</div>
       <div class="settings-row">
@@ -948,6 +963,7 @@ let outputStream = 'stdout';   // stdin | stdout | stderr | info
 let outputRenderId = 0;        // 每次运行 / 清空 +1，用来丢弃上一次运行的滚动记录
 let streamScroll = {};         // 每个输出流各自的 { top, atBottom, runId }
 let compileProblems = [];      // 最近一次运行从 stderr 解析出的问题
+let fullwidthProblems = [];
 const clangdProblems = {};     // 按文件路径保存的 clangd 诊断
 let pendingDiskSave = false;
 let outputData = { stdout:'', stderr:'', info:'' };
@@ -1817,6 +1833,34 @@ const LINT_KNOWN = {
     'int8_t','int16_t','int32_t','int64_t','uint8_t','uint16_t','uint32_t','uint64_t','intptr_t','uintptr_t','auto_ptr','shared_ptr','unique_ptr','weak_ptr']
 };
 
+const FULLWIDTH_SYMBOLS = Object.freeze({
+  '，':'半角逗号 ,','。':'半角句号 .','；':'半角分号 ;','：':'半角冒号 :',
+  '（':'半角左括号 (','）':'半角右括号 )','［':'半角左方括号 [','］':'半角右方括号 ]',
+  '｛':'半角左花括号 {','｝':'半角右花括号 }','＜':'半角小于号 <','＞':'半角大于号 >',
+  '＝':'半角等号 =','＋':'半角加号 +','－':'半角减号 -','＊':'半角乘号 *','／':'半角斜杠 /',
+  '％':'半角百分号 %','！':'半角感叹号 !','＆':'半角与号 &','｜':'半角竖线 |','～':'半角波浪号 ~',
+  '＾':'半角脱字符 ^','｀':'半角反引号 `','“':'半角双引号 "','”':'半角双引号 "',
+  '‘':"半角单引号 '",'’':"半角单引号 '",'【':'半角左方括号 [','】':'半角右方括号 ]',
+  '×':'乘法运算符 *','÷':'除法运算符 /','　':'半角空格'
+});
+
+function fullwidthProblemsFor(doc, path) {
+  const out = [], lineStarts = [0];
+  for (let i = 0; i < doc.length; i++) if (doc[i] === '\n') lineStarts.push(i + 1);
+  for (let i = 0; i < doc.length; i++) {
+    const char = doc[i], code = char.charCodeAt(0);
+    const fullwidthAscii = /[！-／：-＠［-｀｛-～]/.test(char);
+    const replacement = FULLWIDTH_SYMBOLS[char] || (fullwidthAscii ? '半角符号 ' + String.fromCharCode(code - 0xFEE0) : '');
+    if (!replacement) continue;
+    let lo = 0, hi = lineStarts.length;
+    while (lo + 1 < hi) { const mid = (lo + hi) >> 1; if (lineStarts[mid] <= i) lo = mid; else hi = mid; }
+    out.push({ file: path || '', line: lo + 1, col: i - lineStarts[lo] + 1, severity: 'error',
+      message: `全角符号“${doc[i]}”，请使用${replacement}`, source: 'syntax' });
+    if (out.length >= 500) break;
+  }
+  return out;
+}
+
 function splitTopLevel(s) {
   const out = []; let d = 0, cur = '';
   for (const c of s) {
@@ -2048,10 +2092,9 @@ function requestClangdDiagnostics() {
 function lintDocument() {
   const cm = editor;
   if (!cm) return;
-  cm.getAllMarks().forEach(m => { if (m.className === 'cm-doge-undefined') m.clear(); });
-
   const doc = cm.getValue();
   const masked = maskDoc(cm);
+  cm.getAllMarks().forEach(m => { if (m.className === 'cm-doge-undefined') m.clear(); });
   const { names, spans } = collectDefs(masked);
 
   const known = new Set(LINT_KNOWN[currentLang] || []);
@@ -2086,6 +2129,34 @@ function lintDocument() {
   }
 }
 
+function maskCodePunctuation(cm) {
+  return Array.from({length:cm.lineCount()}, (_, line) => {
+    const text = cm.getLine(line).split('');
+    for (const token of cm.getLineTokens(line, true)) {
+      if (!token.type) continue;
+      if (/\b(?:string(?:-2)?|comment)\b/.test(token.type)) {
+        for (let ch=token.start;ch<token.end;ch++) text[ch]=' ';
+      } else if (/\bmeta\b/.test(token.type)) {
+        // C/C++ preprocessor tokens include their quoted strings in one token.
+        for (const match of token.string.matchAll(/"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)/g)) {
+          for (let ch=token.start+match.index;ch<token.start+match.index+match[0].length;ch++) text[ch]=' ';
+        }
+      }
+    }
+    return text.join('');
+  }).join('\n');
+}
+function lintFullwidthSymbols(cm) {
+  if (!cm) return;
+  cm.getAllMarks().forEach(m => { if (m.className === 'cm-doge-fullwidth') m.clear(); });
+  fullwidthProblems = isDataFile(currentFilePath) || getSetting('fullwidthSymbolLint', '1') === '0' ? [] : fullwidthProblemsFor(maskCodePunctuation(cm), currentFilePath);
+  for (const problem of fullwidthProblems) {
+    const line = problem.line - 1, ch = problem.col - 1;
+    cm.markText(CodeMirror.Pos(line, ch), CodeMirror.Pos(line, ch + 1), { className: 'cm-doge-fullwidth', title: problem.message });
+  }
+  if (panelView === 'problems') renderProblems(); else updateProblemBadges();
+}
+
 function clearLocalLintMarks() {
   if (!editor) return;
   editor.getAllMarks().forEach(m => { if (m.className === 'cm-doge-undefined') m.clear(); });
@@ -2094,8 +2165,13 @@ function clearLocalLintMarks() {
 // 本地“未定义名”检查只认手工符号表，对 C/C++ 标准库会大量误报；clangd 可用时由 clangd 诊断接管
 function scheduleLint() {
   clearTimeout(lintTimer);
-  if (isDataFile(currentFilePath) || (['c', 'cpp'].includes(currentLang) && clangdEnabledForFile())) {
+  lintFullwidthSymbols(editor);
+  if (isDataFile(currentFilePath)) {
     clearLocalLintMarks();
+    return;
+  }
+  if (['c', 'cpp'].includes(currentLang) && clangdEnabledForFile()) {
+    editor.getAllMarks().forEach(m => { if (m.className === 'cm-doge-undefined') m.clear(); });
     return;
   }
   lintTimer = setTimeout(lintDocument, 450);
@@ -2693,6 +2769,7 @@ function resetEditorSession(markSaved) {
   projectDocs.clear();
   for (const key of Object.keys(clangdProblems)) delete clangdProblems[key];
   compileProblems = [];
+  fullwidthProblems = [];
   if (markSaved) { savedHashes = snapshotHashes(); persistSavedHashes(); }
   persistOpenFiles();
 }
@@ -2918,13 +2995,13 @@ function normalizeClangdDiagnostic(d, path) {
     message: String((d && d.message) || '').trim() || 'clangd 诊断', source: 'clangd'
   };
 }
-// 合并多个来源；同文件、同行、同级别、同消息视为同一问题，保留先出现的
+// 合并多个来源；同文件、同行列、同级别、同消息视为同一问题，保留先出现的
 function mergeProblems(lists) {
   const out = [];
   const seen = new Set();
   for (const list of lists) {
     for (const p of (list || [])) {
-      const key = p.file + '|' + p.line + '|' + p.severity + '|' + p.message;
+      const key = p.file + '|' + p.line + '|' + p.col + '|' + p.severity + '|' + p.message;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(p);
@@ -2949,7 +3026,7 @@ function collectProblems() {
     return hit ? { ...p, file: hit.path } : p;
   });
   const clangd = Object.keys(clangdProblems).map(k => clangdProblems[k]);
-  return mergeProblems([compile, ...clangd]);
+  return mergeProblems([fullwidthProblems, compile, ...clangd]);
 }
 function updateProblemBadges(items) {
   const c = problemCounts(items || collectProblems());
@@ -3147,7 +3224,7 @@ function initEditor() {
     lineNumbers: true,
     gutters: [BP_GUTTER, 'CodeMirror-linenumbers'],
     matchBrackets: true,
-    autoCloseBrackets: true,
+    autoCloseBrackets: editorBracketOptions(),
     styleActiveLine: true,
     indentUnit: 4,
     tabSize: 4,
@@ -3168,6 +3245,7 @@ function initEditor() {
       // Tab uses CodeMirror's native keymap. Android IME owns composition state.
     }
   });
+  applyEditorPreferences();
   editor.getWrapperElement().addEventListener('keyup', event => {
     if (event.key !== 'Tab' || editor.getOption('readOnly')) return;
     // Android WebView can leave indentation selected in CodeMirror's hidden input.
@@ -3202,6 +3280,7 @@ function initEditor() {
     if (gutter === BP_GUTTER) toggleBreakpoint(line);
   });
   renderBreakpoints();
+  bindBracketInput();
   bindAutoComplete();
   bindRichCopy();
   updateEditorAvailability();
@@ -4874,6 +4953,11 @@ function loadSettingsForm() {
   if (ctrlI) ctrlI.checked = ctrlIStdinEnabled();
   const auto = document.getElementById('autoCompleteInput');
   if (auto) auto.checked = autoCompleteEnabled();
+  document.getElementById('autoCloseBracketsInput').checked = getSetting('autoCloseBrackets', '1') !== '0';
+  const ligatures = document.getElementById('symbolLigaturesInput');
+  if (ligatures) ligatures.checked = getSetting('symbolLigatures', '0') === '1';
+  const fullwidth = document.getElementById('fullwidthSymbolLintInput');
+  if (fullwidth) fullwidth.checked = getSetting('fullwidthSymbolLint', '1') !== '0';
 }
 function openSettings() {
   loadSettingsForm();
@@ -4909,8 +4993,15 @@ function saveSettings() {
   if (ctrlI) setSetting('ctrlIStdin', ctrlI.checked ? '1' : '0');
   const auto = document.getElementById('autoCompleteInput');
   if (auto) { setSetting('autoComplete', auto.checked ? '1' : '0'); if (!auto.checked && editor) editor.closeHint(); }
+  setSetting('autoCloseBrackets', document.getElementById('autoCloseBracketsInput').checked ? '1' : '0');
+  const ligatures = document.getElementById('symbolLigaturesInput');
+  if (ligatures) setSetting('symbolLigatures', ligatures.checked ? '1' : '0');
+  const fullwidth = document.getElementById('fullwidthSymbolLintInput');
+  if (fullwidth) setSetting('fullwidthSymbolLint', fullwidth.checked ? '1' : '0');
   saveProject();
   applyCodeSize();
+  applyEditorPreferences();
+  scheduleLint();
   closeSettings();
   showToast('设置已保存', 'success');
 }
@@ -4994,6 +5085,54 @@ window.toolchainProgress = function(percent, message) {
   startImportWatchdog();
 };
 
+function bindBracketInput() {
+  const cm = editor, input = cm.getInputField();
+  const pairs = {'(':')','[':']','{':'}'};
+  let composing = false, pending = null;
+  const complete = change => {
+    if (!cm.getOption('autoCloseBrackets') || cm.getOption('readOnly') || cm.listSelections().length !== 1) return;
+    if (!change || !['+input','*compose'].includes(change.origin) || change.text.length !== 1 || change.text[0].length !== 1) return;
+    const char = change.text[0], from = change.from, end = CodeMirror.Pos(from.line, from.ch + 1), cursor = cm.getCursor();
+    if (!pairs[char] && !')]}'.includes(char)) return;
+    if (cursor.line !== end.line || cursor.ch !== end.ch || cm.getRange(from,end) !== char) return;
+    const next = cm.getRange(end,CodeMirror.Pos(end.line,end.ch+1));
+    cm.operation(() => {
+      if (pairs[char] && (!next || /[\s)\]}'":;>]/.test(next))) {
+        cm.replaceRange(pairs[char],end,end,'+input');
+        cm.setCursor(end);
+      } else if (')]}'.includes(char) && next === char) {
+        cm.replaceRange('',from,end,'+input');
+        cm.setCursor(end);
+      }
+    });
+  };
+  input.addEventListener('compositionstart',() => {composing=true;pending=null;});
+  input.addEventListener('compositionend',() => {
+    composing=false;
+    setTimeout(() => {const change=pending;pending=null;complete(change);},0);
+  });
+  cm.on('beforeChange',(instance,change) => {
+    if (composing || !cm.getOption('autoCloseBrackets') || cm.getOption('readOnly') || cm.listSelections().length !== 1) return;
+    if (change.origin !== '+input' || change.text.length !== 1 || !pairs[change.text[0]]) return;
+    const selected=cm.getRange(change.from,change.to);
+    if (selected) change.update(change.from,change.to,(change.text[0]+selected+pairs[change.text[0]]).split('\n'));
+  });
+  cm.on('inputRead',(instance,change) => {
+    if (composing) pending=change;
+    else complete(change);
+  });
+}
+function editorBracketOptions() {
+  return getSetting('autoCloseBrackets', '1') === '0' ? false : {pairs:"()[]{}''\"\"",closeBefore:")]}'\":;>"};
+}
+function applyEditorPreferences() {
+  if (!editor) return;
+  const wrapper = editor.getWrapperElement();
+  wrapper.classList.toggle('doge-symbol-ligatures', getSetting('symbolLigatures', '0') === '1');
+  wrapper.setAttribute('data-symbol-ligatures', getSetting('symbolLigatures', '0') === '1' ? 'on' : 'off');
+  editor.setOption('autoCloseBrackets', editorBracketOptions());
+  editor.refresh();
+}
 function getSetting(key, defaultVal) {
   try {
     const val = localStorage.getItem('doge-ide-' + key);

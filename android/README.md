@@ -156,6 +156,11 @@ manifest、运行库导入标识和依赖包内容标识区分；目前是整个
 
 ## 行为回归
 
+设置 → 编辑支持“自动补齐括号”（默认开启）、“启用符号合并”（默认关闭）和
+“检查全角符号”（默认开启）。连字只改变编辑器显示，复制和保存仍为原始字符；
+全角符号在代码区域标红，字符串/注释中的中文标点不提示。实现及验证范围见
+`report/EDITOR-SYMBOLS-2026-10-07.md`。
+
 ```powershell
 node test/frontend-baseline.mjs
 pwsh -File test/runtime-regression.ps1 -Case all
@@ -164,6 +169,7 @@ python -B test/python-bootstrap-regression.py
 node test/proxy-regression.mjs
 node test/browser-smoke-python.mjs
 node test/browser-smoke-terminal.mjs
+node test/browser-smoke-symbols.mjs
 python -B test/wasi-terminal-regression.py
 ```
 

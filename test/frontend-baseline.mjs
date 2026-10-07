@@ -129,6 +129,31 @@ function loadPureFns(names, preamble = '') {
   }
 }
 
+// 编辑器偏好与全角符号诊断
+{
+  const fullwidthConst = (html.match(/const FULLWIDTH_SYMBOLS = Object\.freeze\(\{[\s\S]*?\}\);/) || [''])[0];
+  const { fullwidthProblemsFor } = loadPureFns(['fullwidthProblemsFor'], fullwidthConst);
+  const {maskCodePunctuation} = loadPureFns(['maskCodePunctuation']);
+  const lines = ['int main（ ） {','  printf("中文，合法");','  return 0；','}'];
+  const cm = {lineCount:()=>lines.length,getLine:n=>lines[n],getLineTokens:n=>n===1?[{start:9,end:16,type:'string'}]:[]};
+  const problems = fullwidthProblemsFor(maskCodePunctuation(cm), 'main.c');
+  eq('fullwidth: 代码中的全角括号和分号定位', problems.map(p => [p.line, p.col, p.file]), [[1, 9, 'main.c'], [1, 11, 'main.c'], [3, 11, 'main.c']]);
+  eq('fullwidth: 提示包含替换建议', problems[0].message, '全角符号“（”，请使用半角左括号 (');
+  eq('fullwidth: 字符串标点被排除', maskCodePunctuation(cm).split('\n')[1], '  printf(       );');
+  eq('fullwidth: 全角 ASCII 标点和中文括号均检查', fullwidthProblemsFor('＃＂＇＼【】', 'main.c').length, 6);
+  eq('fullwidth: 全角字母和数字不被当成标点', fullwidthProblemsFor('ＡＢＣ１２３', 'main.py'), []);
+  eq('fullwidth: 多个相同符号分别定位', fullwidthProblemsFor('（（', 'main.py').map(p=>p.col), [1,2]);
+  eq('fullwidth: 诊断数量有上限', fullwidthProblemsFor('（'.repeat(1000),'main.py').length, 500);
+  ok('fullwidth: 红色波浪标记样式存在', /cm-doge-fullwidth\{text-decoration:underline wavy var\(--ed-error\)/.test(html));
+  ok('fullwidth: 检查默认开启', /id="fullwidthSymbolLintInput" checked/.test(html) && /getSetting\('fullwidthSymbolLint', '1'\)/.test(html));
+  ok('ligature: 符号合并默认关闭', /id="symbolLigaturesInput"/.test(html) && /getSetting\('symbolLigatures', '0'\)/.test(html));
+  ok('ligature: 只通过编辑器显示类启用', /doge-symbol-ligatures/.test(html) && /font-variant-ligatures:contextual/.test(html));
+  ok('brackets: CodeMirror 配置走偏好入口', /autoCloseBrackets:\s*editorBracketOptions\(\)/.test(html));
+  const makeBrackets=new Function('value',`const getSetting=()=>value;${extractFn('editorBracketOptions')};return editorBracketOptions();`);
+  eq('brackets: 默认开启并支持三类括号',makeBrackets('1').pairs,"()[]{}''\"\"");
+  eq('brackets: 关闭返回 false',makeBrackets('0'),false);
+}
+
 // ── 5. APK 行为不变量(静态存在性断言) ───────────────────────────
 ok('inv: CodeMirror inputStyle textarea', /inputStyle:\s*'textarea'/.test(html));
 // 1.1.1 起 APK 内也自动弹出补全（Tab 吞字的根因是 contenteditable，已由 inputStyle:'textarea' 修复）；
@@ -343,9 +368,9 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
     let currentFilePath = path, currentLang = language, switchingProjectFile = false, editor, openFiles = [], clangdDiagnosticRequest = 0;
     const isRunning = false, BP_GUTTER = 'bp', editorHint = () => {};
     const getProjectFile = p => project.files.find(file => file.path === p);
-    const noop = () => {}, clearTimeout = noop, setTimeout = noop;
+    const noop = () => {}, clearTimeout = noop, setTimeout = noop, applyEditorPreferences = noop, editorBracketOptions=()=>true;
     const buildTabs = noop, loadBreakpoints = noop, loadSavedHashes = noop, loadOpenFiles = noop;
-    const renderEditorTabs = noop, renderBreakpoints = noop, bindAutoComplete = noop, bindRichCopy = noop, updateEditorAvailability = noop;
+    const renderEditorTabs = noop, renderBreakpoints = noop, bindBracketInput = noop, bindAutoComplete = noop, bindRichCopy = noop, updateEditorAvailability = noop;
     const scheduleLint = noop, persistOpenFiles = noop, updateLangInfo = noop, renderProjectFiles = noop, saveCurrentFile = noop, requestClangdDiagnostics = noop;
     const document = { getElementById: () => ({}) };
     const stub = { getWrapperElement: () => ({addEventListener:noop}), on:noop, setValue:noop, closeHint:noop,
@@ -377,7 +402,7 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
   const enabled = /function clangdEnabledForFile\(/.test(html) ? extractFn('clangdEnabledForFile') : '';
   const checkLanguageService = new Function('language', 'path', `
     const project={language,files:[{path,code:'sample'}]},currentFilePath=path,currentLang=language;
-    let clangdDiagnosticRequest=0, remote=0, scheduled=0, lintTimer=null;
+    let clangdDiagnosticRequest=0, remote=0, scheduled=0, lintTimer=null,fullwidthProblems=[];
     const clangdProblems={},clangdCompletionCache={},panelView='output';
     const editor={getAllMarks:()=>[],getCursor:()=>({line:0,ch:0})},cm=editor;
     const getLang=id=>({id}),toolchainReady=()=>true,activeBuildProfile=()=>({});
@@ -385,7 +410,7 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
     const requestClangdCompletions=()=>{remote++;return Promise.resolve();};
     const fetch=()=>{remote++;return Promise.resolve({ok:true,json:async()=>({items:[]})});};
     const fetchApi=fetch;
-    const updateProblemBadges=()=>{},renderProblems=()=>{},clearTimeout=()=>{},lintDocument=()=>{},setTimeout=()=>{scheduled++;};
+    const updateProblemBadges=()=>{},renderProblems=()=>{},clearTimeout=()=>{},lintDocument=()=>{},lintFullwidthSymbols=()=>{},setTimeout=()=>{scheduled++;};
     ${extractFn('isDataFile')}
     ${extractFn('projectLang')}
     ${enabled}
@@ -441,7 +466,7 @@ ok('bp: 断点按文件路径存储', /breakpoints\[currentFilePath\]/.test(html
     let project = { files: [{ path: 'main.c', code: 'initial' }] };
     let savedHashes = null, pendingDiskSave = false;
     let pendingDiskSaveRequest = null, queuedDiskSaveRequest = null, projectSaveSession = 0;
-    let openFiles = [], compileProblems = [];
+    let openFiles = [], compileProblems = [], fullwidthProblems=[];
     const projectDocs = new Map(), clangdProblems = {}, sent = [];
     const window = {}, DogeNative = { saveProject: json => sent.push(JSON.parse(json)) };
     window.DogeNative = DogeNative;

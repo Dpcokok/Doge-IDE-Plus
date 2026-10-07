@@ -56,7 +56,7 @@ Step '真实 C WASI 终端刷新回归（Node 主机）' {
 #     b6：多视口布局、触控尺寸、窄屏覆盖层、软键盘、默认主题
 #     completion：输入时自动补全（按键 / 输入法组字 / clangd 模拟 / 触控点选）
 Step '浏览器冒烟测试' {
-  foreach ($t in 'browser-smoke-b5.mjs', 'browser-smoke-b6.mjs', 'browser-smoke-completion.mjs', 'browser-smoke-python.mjs', 'browser-smoke-terminal.mjs') {
+  foreach ($t in 'browser-smoke-b5.mjs', 'browser-smoke-b6.mjs', 'browser-smoke-completion.mjs', 'browser-smoke-python.mjs', 'browser-smoke-terminal.mjs', 'browser-smoke-symbols.mjs') {
     & node (Join-Path $root "test/$t")
     if ($LASTEXITCODE -ne 0) { throw "$t exit $LASTEXITCODE" }
   }
