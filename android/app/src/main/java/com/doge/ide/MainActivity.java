@@ -520,7 +520,7 @@ public class MainActivity extends Activity {
         JSONArray previousFiles = previousManifest == null ? new JSONArray() : previousManifest.optJSONArray("files");
         java.util.HashSet<String> currentPaths = new java.util.HashSet<>();
         LinkedHashMap<String, byte[]> previousContents = new LinkedHashMap<>();
-        ArrayList<String> createdPaths = new ArrayList<>();
+        ArrayList<Uri> createdDocuments = new ArrayList<>();
         boolean committed = false;
         try {
         for (int i = 0; i < files.length(); i++) {
@@ -540,14 +540,13 @@ public class MainActivity extends Activity {
                     if (old != null) { byte[] buffer = new byte[8192]; int n; while ((n = old.read(buffer)) > 0) { if (bytes.size() + n > MAX_PROJECT_FILE) throw new IOException("已有文件过大，无法建立保存回滚副本: " + path); bytes.write(buffer, 0, n); } }
                     previousContents.put(path, bytes.toByteArray());
                 }
-            } else {
-                createdPaths.add(path);
             }
             Uri target;
             if (id == null) {
-                Uri created = DocumentsContract.createDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, parentId), "text/plain", name);
+                Uri created = DocumentsContract.createDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, parentId), ProjectFiles.mimeTypeForPath(name), name);
                 if (created == null) throw new IOException("无法创建项目文件: " + path);
-                target = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getDocumentId(created));
+                target = documentWithExpectedName(tree, created, name);
+                createdDocuments.add(target);
             } else target = DocumentsContract.buildDocumentUriUsingTree(tree, id);
             try (OutputStream output = getContentResolver().openOutputStream(target, "wt")) {
                 if (output == null) throw new IOException("无法写入项目文件: " + path);
@@ -578,8 +577,8 @@ public class MainActivity extends Activity {
         }
         } finally {
             if (!committed) {
-                for (String path : createdPaths) {
-                    try { String id = findDocumentByPath(tree, path, rootId); if (id != null) DocumentsContract.deleteDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, id)); } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not remove " + path, rollbackError); }
+                for (Uri created : createdDocuments) {
+                    try { DocumentsContract.deleteDocument(getContentResolver(), created); } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not remove " + created, rollbackError); }
                 }
                 for (Map.Entry<String, byte[]> entry : previousContents.entrySet()) {
                     try { String id = findDocumentByPath(tree, entry.getKey(), rootId); if (id != null) try (OutputStream output = getContentResolver().openOutputStream(DocumentsContract.buildDocumentUriUsingTree(tree, id), "wt")) { if (output != null) output.write(entry.getValue()); } } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not restore " + entry.getKey(), rollbackError); }
@@ -593,6 +592,30 @@ public class MainActivity extends Activity {
                 } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not restore manifest", rollbackError); }
             }
         }
+    }
+
+    private Uri documentWithExpectedName(Uri tree, Uri created, String expectedName) throws IOException {
+        Uri cleanup = created;
+        try {
+            if (expectedName.equals(queryDisplayName(created))) {
+                return DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getDocumentId(created));
+            }
+            Uri renamed = DocumentsContract.renameDocument(getContentResolver(), created, expectedName);
+            if (renamed != null) {
+                cleanup = renamed;
+                if (expectedName.equals(queryDisplayName(renamed))) {
+                    return DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getDocumentId(renamed));
+                }
+            }
+        } catch (Exception renameError) {
+            Log.w(TAG, "could not preserve project filename " + expectedName, renameError);
+        }
+        try {
+            DocumentsContract.deleteDocument(getContentResolver(), cleanup);
+        } catch (Exception cleanupError) {
+            Log.w(TAG, "could not remove incorrectly named project file " + expectedName, cleanupError);
+        }
+        throw new IOException("文件提供器无法保留文件名: " + expectedName);
     }
 
     private JSONObject readManifest(Uri tree) throws Exception { return readManifest(tree, projectRootId(tree)); }
@@ -615,7 +638,7 @@ public class MainActivity extends Activity {
         if (id == null) {
             Uri created = DocumentsContract.createDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, parentId), "application/json", name);
             if (created == null) throw new IOException("无法创建项目清单");
-            target = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getDocumentId(created));
+            target = documentWithExpectedName(tree, created, name);
         } else target = DocumentsContract.buildDocumentUriUsingTree(tree, id);
         try (OutputStream output = getContentResolver().openOutputStream(target, "wt")) {
             if (output == null) throw new IOException("无法写入项目清单");
@@ -652,7 +675,7 @@ public class MainActivity extends Activity {
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId);
         String[] projection = {DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME};
         try (Cursor cursor = getContentResolver().query(children, projection, null, null, null)) {
-            if (cursor == null) return null;
+            if (cursor == null) throw new IOException("无法查询项目目录，已取消保存以避免创建副本");
             while (cursor.moveToNext()) if (name.equals(cursor.getString(1))) return cursor.getString(0);
         }
         return null;

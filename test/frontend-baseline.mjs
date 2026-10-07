@@ -156,6 +156,8 @@ function loadPureFns(names, preamble = '') {
 
 // ── 5. APK 行为不变量(静态存在性断言) ───────────────────────────
 ok('inv: CodeMirror inputStyle textarea', /inputStyle:\s*'textarea'/.test(html));
+ok('save: SAF creation uses MIME matching the project filename', /createDocument\([\s\S]{0,250}ProjectFiles\.mimeTypeForPath\(name\),\s*name\)/.test(java));
+ok('save: SAF-renamed documents are checked and cleaned up when names cannot be preserved', /documentWithExpectedName\(tree,\s*created,\s*name\)/.test(java) && /deleteDocument\(getContentResolver\(\),\s*cleanup\)/.test(java));
 // 1.1.1 起 APK 内也自动弹出补全（Tab 吞字的根因是 contenteditable，已由 inputStyle:'textarea' 修复）；
 // 这里改为守护：自动补全不再按 DogeNative 关闭、可在设置里关闭、输入法组字也能触发
 ok('inv: 自动补全不再在 APK 内关闭', !/function bindAutoComplete[\s\S]{0,300}if \(window\.DogeNative\) return;/.test(html));

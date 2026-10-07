@@ -21,6 +21,32 @@ try {
     $scanPredicate = [regex]::Match($activitySource, 'private static boolean isSourceFile\(String name\)\s*\{[^\r\n]*\}').Value
     if (-not $scanPredicate) { throw 'Project scan predicate was not found.' }
     $sources['ProjectScanPolicy.java'] = 'package com.doge.ide; final class ProjectScanPolicy { ' + $scanPredicate.Replace('private static', 'static') + ' }'
+    # Exercise the actual read/save implementation with the SAF API boundary replaced.
+    $saveStart = $activitySource.IndexOf('    private JSONObject readProject(Uri tree, String rootId)')
+    if ($saveStart -lt 0) { throw 'Project read method was not found.' }
+    $saveEnd = $activitySource.IndexOf('    private void notifyProjectError', $saveStart)
+    if ($saveEnd -lt 0) { throw 'Project save methods were not found.' }
+    $policy = @('isSafeName', 'isSourceFile', 'isSafeProjectPath') | ForEach-Object {
+        [regex]::Match($activitySource, "private static boolean $_\(String (name|path)\)\s*\{[^\r\n]*\}").Value
+    }
+    $sources['ProjectSaveHarness.java'] = @'
+package com.doge.ide;
+import android.util.Log;
+import org.json.*;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+final class ProjectSaveHarness {
+    private static final String TAG = "save-test", PROJECT_MANIFEST = ".doge-project.json";
+    private static final int MAX_PROJECT_FILE = 2 * 1024 * 1024;
+    private final Object projectWriteLock = new Object();
+    private final SafProviderFixture resolver;
+    ProjectSaveHarness(SafProviderFixture resolver) { this.resolver = resolver; }
+    private SafProviderFixture getContentResolver() { return resolver; }
+    private String projectRootId(Uri tree) { return tree.id; }
+    void save(JSONObject project, String rootId) throws Exception { writeProject(new Uri("root", false), project, rootId); }
+    JSONObject read(String rootId) throws Exception { return readProject(new Uri("root", false), rootId); }
+'@ + "`n" + $activitySource.Substring($saveStart, $saveEnd - $saveStart) + "`n" + ($policy -join "`n") + "`n}"
     $sources['Context.java'] = @'
 package android.content;
 import java.io.File;
@@ -57,6 +83,21 @@ public final class Build { public static final class VERSION { public static int
 package android.os;
 public final class Process {
     public static void killProcess(int pid) { java.lang.ProcessHandle.of(pid).ifPresent(java.lang.ProcessHandle::destroyForcibly); }
+}
+'@
+    $sources['MimeTypeMap.java'] = @'
+package android.webkit;
+import java.util.Map;
+public final class MimeTypeMap {
+    private static final MimeTypeMap INSTANCE = new MimeTypeMap();
+    private static final Map<String,String> TYPES = Map.ofEntries(
+        Map.entry("py", "text/x-python"), Map.entry("c", "text/x-csrc"), Map.entry("h", "text/x-chdr"),
+        Map.entry("cc", "text/x-c++src"), Map.entry("cpp", "text/x-c++src"), Map.entry("cxx", "text/x-c++src"),
+        Map.entry("hh", "text/x-c++hdr"), Map.entry("hpp", "text/x-c++hdr"), Map.entry("hxx", "text/x-c++hdr"),
+        Map.entry("txt", "text/plain"), Map.entry("json", "application/json"), Map.entry("csv", "text/csv"),
+        Map.entry("md", "text/markdown"));
+    public static MimeTypeMap getSingleton() { return INSTANCE; }
+    public String getMimeTypeFromExtension(String extension) { return TYPES.get(extension); }
 }
 '@
     $sources['DependencyManager.java'] = @'
@@ -129,6 +170,12 @@ public class JSONObject {
     public static String quote(String x) { return new Gson().toJson(x); }
 }
 '@
+    $sources['JSONException.java'] = @'
+package org.json;
+public class JSONException extends RuntimeException {
+    public JSONException(String message) { super(message); }
+}
+'@
     $sources['JSONArray.java'] = @'
 package org.json;
 import com.google.gson.*;
@@ -156,6 +203,7 @@ public class JSONArray {
     if ($LASTEXITCODE -ne 0) { throw 'Child-process fixture compilation failed.' }
     $sourcePaths = @(Get-ChildItem -LiteralPath $work -Filter '*.java' | ForEach-Object FullName)
     $sourcePaths += Join-Path $PSScriptRoot 'RuntimeRegression.java'
+    $sourcePaths += Join-Path $PSScriptRoot 'SafProviderFixture.java'
     foreach ($name in 'LocalCompiler.java', 'PythonRunner.java', 'TaskRegistry.java', 'RunSession.java', 'ClangdService.java', 'RuntimeCompat.java', 'LocalServer.java', 'ProjectFiles.java') {
         $sourcePaths += Join-Path $repoRoot "android/app/src/main/java/com/doge/ide/$name"
     }

@@ -422,7 +422,8 @@ public final class RuntimeRegression {
         if (args[1].equals("server") || args[1].equals("all")) serverSecurityTests();
         if (args[1].equals("session") || args[1].equals("all")) sessionTests(runner);
         if (args[1].equals("manifest") || args[1].equals("all")) manifestTests(runner, Path.of(args[0], "RuntimeChild.exe"));
-        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "server", "session", "manifest", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
+        if (args[1].equals("save") || args[1].equals("all")) projectSaveTests();
+        if (!java.util.Set.of("stdin", "compiler", "output", "workspace", "lsp", "compat", "cache", "server", "session", "manifest", "save", "all").contains(args[1])) throw new IllegalArgumentException("Unknown case: " + args[1]);
         System.out.println("Runtime regression: " + passed + " passed, " + failed + " failed");
         if (failed != 0) System.exit(1);
     }
@@ -469,5 +470,60 @@ public final class RuntimeRegression {
                     .put(new JSONObject().put("path","../.doge-project.json").put("code","{}")));
             check(language+" still rejects traversal disguised as metadata","invalid_request".equals(new JSONObject(compiler.execute(request.toString())).optString("status")));
         }
+    }
+
+    private static JSONObject saveRequest(String name, String code) {
+        return new JSONObject().put("name", "SaveTest").put("language", "python")
+                .put("files", new JSONArray().put(new JSONObject().put("path", name).put("code", code)));
+    }
+
+    private static void projectSaveTests() throws Exception {
+        int fixture = 0;
+        for (String name : new String[] { "main.py", "main.c", "main.cpp", "include/util.hpp", "src/main.cxx", "config.json", "data.csv", "readme.md", "notes.txt", "Main.PY" }) {
+            SafProviderFixture provider = new SafProviderFixture(root.toPath().resolve("save-" + (++fixture)));
+            ProjectSaveHarness activity = new ProjectSaveHarness(provider);
+            for (String code : new String[] { "first-very-long-content", "second-edit", "last" }) {
+                activity.save(saveRequest(name, code), "root");
+            }
+            check("repeated saves create no copies for " + name, provider.idForPath(name) != null && provider.fileCount() == 2);
+            check("overwrite truncates old content for " + name, provider.idForPath(name) != null && "last".equals(provider.text(name)));
+            JSONArray files = new ProjectSaveHarness(provider).read("root").optJSONArray("files");
+            check("reopening preserves saved name and content for " + name, files.length() == 1
+                    && name.equals(files.optJSONObject(0).optString("path")) && "last".equals(files.optJSONObject(0).optString("code")));
+            if (provider.idForPath(name) == null) System.out.println("REPRO names: " + provider.names());
+        }
+        check("project MIME matching is case-insensitive", ProjectFiles.mimeTypeForPath("src/Main.PY").equals("text/x-python"));
+
+        SafProviderFixture provider = new SafProviderFixture(root.toPath().resolve("save-rename"));
+        provider.wrongName = true;
+        new ProjectSaveHarness(provider).save(saveRequest("main.py", "first"), "root");
+        check("provider-added extension is renamed back for source and manifest", provider.idForPath("main.py") != null && provider.idForPath(".doge-project.json") != null && provider.fileCount() == 2);
+        String sourceId = provider.idForPath("main.py");
+        new ProjectSaveHarness(provider).save(saveRequest("main.py", "last"), "root");
+        check("provider-renamed document ID is reused across reopen/save", sourceId.equals(provider.idForPath("main.py")) && provider.fileCount() == 2 && provider.text("main.py").equals("last"));
+
+        provider = new SafProviderFixture(root.toPath().resolve("save-rename-denied"));
+        provider.wrongName = true; provider.denyRename = true;
+        boolean rejected = false;
+        try { new ProjectSaveHarness(provider).save(saveRequest("main.py", "first"), "root"); } catch (java.io.IOException expected) { rejected = true; }
+        check("unfixable provider filename is rejected without leaving a copy", rejected && provider.fileCount() == 0);
+
+        provider = new SafProviderFixture(root.toPath().resolve("save-query-failure"));
+        new ProjectSaveHarness(provider).save(saveRequest("main.py", "original"), "root");
+        int creates = provider.creates;
+        provider.nullQuery = true; rejected = false;
+        try { new ProjectSaveHarness(provider).save(saveRequest("main.py", "new"), "root"); } catch (java.io.IOException expected) { rejected = true; }
+        check("failed directory query cannot create a replacement copy", rejected && provider.creates == creates && provider.text("main.py").equals("original"));
+
+        provider = new SafProviderFixture(root.toPath().resolve("save-rollback"));
+        ProjectSaveHarness activity = new ProjectSaveHarness(provider);
+        activity.save(saveRequest("main.py", "original"), "root");
+        String manifest = provider.text(".doge-project.json");
+        provider.failWrite = "new.py"; rejected = false;
+        JSONObject request = saveRequest("main.py", "changed");
+        request.optJSONArray("files").put(new JSONObject().put("path", "new.py").put("code", "new"));
+        try { activity.save(request, "root"); } catch (java.io.IOException expected) { rejected = true; }
+        check("partial save restores the original file and manifest", rejected && provider.text("main.py").equals("original") && provider.text(".doge-project.json").equals(manifest));
+        check("partial save removes the newly created document by ID", provider.idForPath("new.py") == null && provider.fileCount() == 2);
     }
 }
