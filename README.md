@@ -10,7 +10,7 @@
 [![Gradle deps](https://img.shields.io/badge/Gradle%20deps-0-brightgreen.svg)](#为什么是零依赖)
 [![Min SDK](https://img.shields.io/badge/minSdk-24%20(Android%207.0)-lightgrey.svg)](#支持矩阵)
 
-[特性](#特性) · [截图](#截图) · [快速开始](#快速开始) · [架构](#架构) · [测试](#测试) · [文档索引](#文档索引) · [贡献](#贡献)
+[特性](#特性) · [快速开始](#快速开始) · [架构](#架构) · [测试](#测试) · [文档索引](#文档索引) · [贡献](#贡献)
 
 </div>
 
@@ -59,18 +59,6 @@ Python 则由导入的启动器以子进程方式执行。**设备拿到本地�
 - **本机接口鉴权**：每次启动生成 `X-Doge-Session` 令牌，普通浏览器访问回环接口无法取得
 - **SAF 项目目录**：兼容 Android 7.0，已持久化的读写权限
 - 前端资源由 Gradle `syncWebapp` 任务从仓库根目录同步，改前端无需手动复制
-
----
-
-## 截图
-
-<div align="center">
-
-![Doge IDE+ 横屏界面](report/baseline-1.0.2/screenshot-landscape.png)
-
-<sub>13 英寸平板横屏 · 编辑器 / 文件树 / 终端同屏</sub>
-
-</div>
 
 ---
 
