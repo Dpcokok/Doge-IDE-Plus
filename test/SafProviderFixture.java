@@ -16,7 +16,7 @@ final class SafProviderFixture {
     }
     private final Map<String, Node> nodes = new LinkedHashMap<>();
     int creates;
-    boolean nullQuery, wrongName, denyRename;
+    boolean nullQuery, wrongName, denyRename, changeIdOnRename;
     String failWrite;
 
     SafProviderFixture(Path root) throws IOException {
@@ -77,8 +77,10 @@ final class SafProviderFixture {
         String actual = uniqueName(old.parent, name);
         Path target = old.path.resolveSibling(actual);
         Files.move(old.path, target);
-        nodes.put(uri.id, new Node(uri.id, old.parent, actual, old.mime, target));
-        return uri;
+        String id = changeIdOnRename ? "opaque-renamed-" + (++creates) : uri.id;
+        nodes.remove(uri.id);
+        nodes.put(id, new Node(id, old.parent, actual, old.mime, target));
+        return new Uri(id, false);
     }
 
     boolean delete(Uri uri) throws IOException {

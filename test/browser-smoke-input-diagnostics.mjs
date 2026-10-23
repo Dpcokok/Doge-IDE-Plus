@@ -1,0 +1,62 @@
+// Metadata-only probes for the real browser dispatch path. Desktop Chromium
+// cannot reproduce Android WebView's Sogou InputConnection behavior.
+import {launch,checker,sleep} from './browser-lib.mjs';
+const browser=await launch();
+if(!browser){console.log('SKIP: Edge/Chrome not found');process.exit(0);}
+const {ev,key,typeText,send}=browser,{ok,eq,report}=checker();
+try {
+  await send('Emulation.setUserAgentOverride',{userAgent:'Mozilla/5.0 (Linux; Android 16; Tablet) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339.207 Safari/537.36',platform:'Linux armv8l'});
+  await browser.reload();
+  await ev(`projectOpened({name:'Private project marker',language:'python',files:[{path:'private-path.py',code:'abcdefghijklmnopqr'}]});
+    setSetting('autoComplete','0');editor.focus();true`);
+  const drag=await ev(`(()=>{const a=editor.charCoords({line:0,ch:0},'window'),b=editor.charCoords({line:0,ch:18},'window');
+    return {from:{x:a.left,y:(a.top+a.bottom)/2},to:{x:b.left,y:(b.top+b.bottom)/2}};})()`);
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',...drag.from,button:'left',buttons:1,clickCount:1});
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',...drag.to,button:'left',buttons:1});
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',...drag.to,button:'left',buttons:0,clickCount:1});await sleep(40);
+  eq('real mouse selection covers all 18 characters',await ev('editor.getSelection().length'),18);
+  await send('Input.insertText',{text:''});await sleep(100);
+  eq('real empty IME commit deletes the mouse selection',await ev('editor.getValue()'),'');
+  await key('Backspace');
+  await send('Input.dispatchKeyEvent',{type:'rawKeyDown',key:'Unidentified',windowsVirtualKeyCode:229,nativeVirtualKeyCode:229});
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Unidentified',windowsVirtualKeyCode:229,nativeVirtualKeyCode:229});await sleep(30);
+  const imeKey=await ev(`editorInputEvents.findLast(e=>e.type==='keydown'&&e.keyCode===229)`);
+  ok('diagnostics distinguish native unknown IME keys',imeKey?.key==='Unidentified'&&imeKey.which===229&&imeKey.trusted);
+  eq('current key handlers do not cancel an unknown 229 key',imeKey?.defaultPreventedAfterDispatch,false);
+  await typeText('xy');
+  eq('desktop native submission continues after empty selection commit and Backspace',await ev('editor.getValue()'),'xy');
+  await ev(`document.addEventListener('keydown',window.__diagnosticCancel=e=>{if(e.key==='Unidentified')e.preventDefault();});true`);
+  await send('Input.dispatchKeyEvent',{type:'rawKeyDown',key:'Unidentified',windowsVirtualKeyCode:229,nativeVirtualKeyCode:229});await sleep(30);
+  const canceled=await ev(`editorInputEvents.findLast(e=>e.type==='keydown'&&e.keyCode===229)`);
+  eq('capture records cancellation before a late document handler',canceled?.defaultPreventedAtCapture,false);
+  eq('final observation detects late document cancellation',canceled?.defaultPreventedAfterDispatch,true);
+  await ev(`document.removeEventListener('keydown',window.__diagnosticCancel);true`);
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Unidentified',windowsVirtualKeyCode:229,nativeVirtualKeyCode:229});
+  await key('q');
+  const printable=await ev(`editorInputEvents.findLast(e=>e.type==='keydown'&&e.key==='text-or-navigation')`);
+  ok('printable keyboard codes remain redacted',printable?.keyCode===-1&&printable.which===-1);
+  await ev(`(()=>{const marker=document.createElement('span');marker.id='PRIVATE_NODE_ID';marker.textContent='PRIVATE_SOURCE_MARKER';
+    editor.getWrapperElement().querySelector('.CodeMirror-code').appendChild(marker);
+    const range=document.createRange();range.setStart(marker.firstChild,2);range.setEnd(marker.firstChild,7);
+    const selection=document.getSelection();selection.removeAllRanges();selection.addRange(range);})();true`);
+  const selection=await ev('editorDOMSelection(editor)');
+  ok('DOM selection records node role and numeric offsets',selection.rangeCount===1&&selection.anchor.role==='editor-code'&&selection.anchorOffset===2&&selection.focusOffset===7);
+  eq('DOM selection contains no node ids or text',JSON.stringify(selection).includes('PRIVATE_'),false);
+  await ev('document.getSelection().removeAllRanges();true');
+  await ev('editor.focus();editor.setValue("before input after");editor.setSelection({line:0,ch:7},{line:0,ch:12});true');
+  await typeText('private_replacement_marker');
+  await ev(`for(let i=0;i<180;i++)editor.getInputField().dispatchEvent(new KeyboardEvent('keyup',{key:'q',keyCode:81,which:81,bubbles:true}));true`);await sleep(30);
+  await ev('openEditorInputDiagnostics();true');await sleep(30);
+  const diagnostic=await ev('document.querySelector(".input-diagnostic-log").value'), parsed=JSON.parse(diagnostic);
+  eq('diagnostic schema identifies new fields',parsed.schemaVersion,2);
+  eq('normal frontend history remains bounded',parsed.events.length,100);
+  eq('selection deletion onset survives later typing',parsed.lastDeletion?.trigger.removedLength,18);
+  eq('selection replacement onset survives later typing',parsed.lastReplacement?.trigger.removedLength,5);
+  eq('replacement checkpoint records only inserted length',parsed.lastReplacement?.trigger.insertedLength,'private_replacement_marker'.length);
+  ok('deletion checkpoint retains immediate native commit metadata',parsed.lastDeletion?.before.some(e=>e.type==='input'&&e.dataLength===0));
+  ok('retained history has final dispatch state',parsed.lastDeletion?.after.some(e=>e.type==='keydown'&&e.defaultPreventedAfterDispatch===false&&e.stateAfterDispatch));
+  eq('diagnostics contain no source, ids, or project names',/PRIVATE_|private_replacement_marker|Private project marker|private-path\.py|abcdefghijklmnopqr/.test(diagnostic),false);
+  await key('Escape');
+  ok('no browser exceptions: '+browser.errors.join(' | '),browser.errors.length===0);
+}catch(error){ok('script error: '+error.stack,false);}
+const failures=report('Input diagnostic boundary (desktop Android UA)');await browser.close();process.exit(failures?1:0);

@@ -1,3 +1,10 @@
+# 个人环境路径，不随仓库分发
+java和sdk路径.txt
+
+# 本地临时调试材料：Chromium 源码副本、诊断导出
+tmp/
+diag-*.json
+
 # Desktop build outputs and downloaded toolchains
 exe/.tmp/
 exe/.toolchain/

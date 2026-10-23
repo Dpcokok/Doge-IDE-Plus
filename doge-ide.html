@@ -10,7 +10,7 @@
 // 首屏前就定好主题，避免加载后配色闪一下。1.1.0 起默认现代；设置里选过经典的保持经典。
 try {
   var __t = localStorage.getItem('doge-ide-theme');
-  document.documentElement.dataset.theme = (__t === 'modern' || __t === 'classic') ? __t : 'modern';
+  document.documentElement.dataset.theme = (__t === 'modern' || __t === 'classic' || __t === 'black') ? __t : 'modern';
 } catch (e) { document.documentElement.dataset.theme = 'modern'; }
 </script>
 <link rel="stylesheet" href="web/codemirror/codemirror.min.css">
@@ -111,6 +111,31 @@ try {
   --surface:#24283b;--hover:#292e42;--sunken:#16161e;--muted:#a9b1d6;
   --explorer-w:264px;
 }
+/* 纯黑：主工作区使用 #000，浮层以中性灰区分层级。 */
+[data-theme="black"]{
+  --bg:#000000;--bg2:#000000;--bg3:#111111;--bg4:#1c1c1c;
+  --fg:#e5e5e5;--fg2:#b5b5b5;--fg3:#929292;
+  --accent:#b4c8ff;--accent2:#86d9e8;--green:#a2d9a0;--red:#ff8f9c;
+  --orange:#ebba87;--purple:#c9b3f5;--cyan:#86d9e8;
+  --border:#303030;--shadow:rgba(0,0,0,.75);
+  --surface:#111111;--hover:#1c1c1c;--sunken:#000000;--muted:#b5b5b5;
+  --accent-soft:rgba(180,200,255,.14);--fg-soft:rgba(255,255,255,.06);
+  --on-accent:#000000;--run-bg:var(--accent);
+  --scrim:rgba(0,0,0,.75);--scrim-strong:rgba(0,0,0,.8);
+  --bp-glow:rgba(255,143,156,.45);--debug-line:rgba(180,200,255,.12);
+  --toast-ok-bg:#102014;--toast-ok-border:#315438;
+  --toast-err-bg:#291217;--toast-err-border:#61313b;
+  --ed-bg:#000000;--ed-fg:#e5e5e5;--ed-strong:#ffffff;
+  --ed-gutter:#858585;--ed-selection:#b4c8ff33;
+  --ed-activeline:#111111;--ed-activeline-gutter:#171717;
+  --ed-bracket-bg:#ffffff24;--ed-soft:#ffffff0d;
+  --ed-search:#86d9e844;--ed-search-active:#86d9e866;--ed-fold:#1c1c1ccc;
+  --ed-keyword:#8ed7d0;--ed-var2:#a5cfff;--ed-property:#c9b3f5;
+  --ed-builtin:#e8cb8a;--ed-number:#ebba87;--ed-string:#dca9dd;
+  --ed-comment:#929292;--ed-meta:#a2d9a0;--ed-error:#ff8f9c;
+  --explorer-w:264px;
+}
+[data-theme="black"] .menubar{background:var(--bg2)}
 body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:none;touch-action:manipulation;-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}
 
 /* 运行 / 调试按钮 */
@@ -147,6 +172,8 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .cm-s-doge .CodeMirror-guttermarker{color:var(--ed-strong)}
 .cm-s-doge .CodeMirror-linenumber{color:var(--ed-gutter);padding:0 16px 0 8px;font-size:calc(var(--code-size, 14px) - 1.5px)}
 .cm-s-doge .CodeMirror-cursor{border-left:1.5px solid var(--ed-strong)}
+.doge-smooth-caret{position:absolute;left:0;top:0;width:1.5px;background:var(--ed-strong);pointer-events:none;z-index:5;transition:transform 80ms cubic-bezier(.25,.1,.25,1),height 80ms ease}
+.cm-s-doge.CodeMirror.doge-smooth-caret-active div.CodeMirror-cursors,.cm-s-doge.CodeMirror.doge-smooth-caret-active div.CodeMirror-cursor{visibility:hidden}
 .cm-s-doge div.CodeMirror-selected{background:var(--ed-selection)}
 .cm-s-doge .CodeMirror-line::selection,.cm-s-doge .CodeMirror-line>span::selection,.cm-s-doge .CodeMirror-line>span>span::selection{background:var(--ed-selection)}
 .cm-s-doge .CodeMirror-activeline-background{background:var(--ed-activeline)}
@@ -201,7 +228,16 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--fg);height:10
 .CodeMirror-hints .CodeMirror-hint,.CodeMirror-Tern-tooltip{color:var(--ed-fg);padding:3px 8px;border-radius:4px;font-family:var(--font-mono)}
 .CodeMirror-hints .CodeMirror-hint:hover{background:var(--ed-soft)}
 .CodeMirror-hints li.CodeMirror-hint-active,.CodeMirror-hints .CodeMirror-hint-active{background:var(--ed-bracket-bg);color:var(--ed-strong)}
-.CodeMirror-hint .hint-detail{margin-left:14px;color:var(--ed-gutter);font-size:.86em}
+.CodeMirror-hints{background:var(--surface);border-color:var(--border);border-radius:8px;padding:4px;max-width:calc(100vw - 16px);min-width:min(260px,calc(100vw - 16px));overflow-x:hidden}
+.CodeMirror-hints .CodeMirror-hint{display:flex;align-items:center;gap:9px;min-height:30px;max-width:min(480px,calc(100vw - 26px));padding:3px 8px;line-height:1.45}
+.CodeMirror-hints .CodeMirror-hint::before{content:attr(data-icon);order:-1;flex:none;width:20px;text-align:center;color:var(--ed-property);font-size:11px;font-weight:600}
+.CodeMirror-hints .CodeMirror-hint[data-kind="keyword"]::before{color:var(--ed-keyword)}
+.CodeMirror-hints .CodeMirror-hint[data-kind="function"]::before{color:var(--ed-builtin)}
+.CodeMirror-hints .CodeMirror-hint[data-kind="file"]::before{color:var(--ed-meta)}
+.CodeMirror-hints .CodeMirror-hint-active{box-shadow:inset 2px 0 var(--accent)}
+.CodeMirror-hint .hint-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.CodeMirror-hint .hint-match{color:var(--accent);font-weight:700}
+.CodeMirror-hint .hint-detail{min-width:0;margin-left:auto;padding-left:12px;color:var(--muted);font-size:.82em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
 @media (pointer:coarse){ .CodeMirror-hints .CodeMirror-hint{min-height:var(--tap);display:flex;align-items:center;padding:0 12px} }
 
 /* Stdin：并入底部面板，作为一个标签页 */
@@ -505,6 +541,7 @@ body.kb-open.kb-panel .workbench{grid-template-rows:0 0 minmax(0,1fr)}
 .settings-group:first-child{margin-top:6px}
 .dialog-input{width:100%;padding:10px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;font-size:14px;outline:none;font-family:inherit}
 .dialog-input:focus{border-color:var(--accent)}
+.input-diagnostic-log{width:100%;height:240px;resize:vertical;font:11px/1.5 var(--font-mono);white-space:pre;overflow:auto}
 .settings-row select{width:100%;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;font-size:13px;outline:none;font-family:inherit}
 .settings-row select:focus{border-color:var(--accent)}
 .settings-row .inline{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
@@ -768,7 +805,7 @@ body.kb-open .explorer-scrim{bottom:0}
   <button class="opt" onclick="adjustFont(-1)" title="减小编辑器字号">A−</button>
   <span class="item opt">UTF-8</span>
   <span class="item opt">空格=4</span>
-  <button id="statusVersion" onclick="openAbout()" title="关于 Doge IDE+">Doge IDE+ 1.1.2</button>
+  <button id="statusVersion" onclick="openAbout()" title="关于 Doge IDE+">Doge IDE+ 1.1.8</button>
 </div>
 
 <div id="layer"></div>
@@ -781,7 +818,7 @@ body.kb-open .explorer-scrim{bottom:0}
       <div class="settings-group">外观</div>
       <div class="settings-row">
         <label for="themeInput">界面主题</label>
-        <select id="themeInput"><option value="modern">现代（默认）</option><option value="classic">经典（1.0.x 原始配色）</option></select>
+        <select id="themeInput"><option value="modern">现代（默认）</option><option value="classic">经典（1.0.x 原始配色）</option><option value="black">纯黑</option></select>
         <div class="hint">切换界面与编辑器配色，保存后立即生效</div>
       </div>
       <div class="settings-row">
@@ -792,7 +829,7 @@ body.kb-open .explorer-scrim{bottom:0}
       <div class="settings-group">编辑</div>
       <div class="settings-row">
         <label class="settings-check"><input type="checkbox" id="autoCloseBracketsInput" checked>自动补齐括号</label>
-        <div class="hint">输入 (、[、{ 时补齐右括号；支持选中文本包裹和空括号成对删除</div>
+        <div class="hint">补齐括号、引号、反引号和中文成对符号；支持选中文本包裹和空符号对删除</div>
       </div>
       <div class="settings-row">
         <label class="settings-check"><input type="checkbox" id="autoCompleteInput" checked>输入时自动弹出补全</label>
@@ -801,6 +838,10 @@ body.kb-open .explorer-scrim{bottom:0}
       <div class="settings-row">
         <label class="settings-check"><input type="checkbox" id="symbolLigaturesInput">启用符号合并</label>
         <div class="hint">只改变编辑器显示，不修改源码；例如 >=、<=、-> 等符号由字体合并显示</div>
+      </div>
+      <div class="settings-row">
+        <label class="settings-check"><input type="checkbox" id="smoothCaretInput" checked>平滑打字光标</label>
+        <div class="hint">输入和移动光标时平滑跟随；关闭后立即定位</div>
       </div>
       <div class="settings-row">
         <label class="settings-check"><input type="checkbox" id="fullwidthSymbolLintInput" checked>检查全角符号</label>
@@ -1414,7 +1455,7 @@ function dogeCompletions(cm) {
   for (const s of projectHeaderSymbols()) {
     if (headerNames.has(s.name) || !s.name.startsWith(prefix) || s.name === prefix) continue;
     headerNames.add(s.name);
-    headerItems.push({ text: s.name, displayText: s.name, detail: (s.detail || s.kind) + ' · ' + s.file.split('/').pop(), render: renderCompletionItem });
+    headerItems.push({ text: s.name, displayText: s.name, kind: s.kind, detail: (s.detail || s.kind) + ' · ' + s.file.split('/').pop(), render: renderCompletionItem });
   }
   const cand = candidateSet(langWords, inDoc);
   const list = [...cand].filter(w => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(w) && !headerNames.has(w));
@@ -1516,7 +1557,25 @@ function rankCompletions(items, prefix, limit) {
 }
 function currentCompletionPrefix(cm) { const cur=cm.getCursor(), line=cm.getLine(cur.line).slice(0,cur.ch); const match=line.match(/[A-Za-z_][A-Za-z0-9_]*$/); return match ? match[0] : ''; }
 function renderCompletionItem(el, self, data) {
-  el.appendChild(document.createTextNode(data.displayText || data.text));
+  const label = data.displayText || data.text;
+  const kind = data.kind || (/\(/.test(label) ? 'function' :
+    /^(?:#|.*\.(?:h|hpp|hxx|hh)$)/.test(label) ? 'file' :
+    /^(?:return|if|else|for|while|switch|case|break|continue|class|struct|enum|namespace|using|typedef|const|static|void|int|char|float|double|bool|auto|def|import|from|try|catch|throw|except|with|yield|async|await|let|var|function)$/.test(data.text) ? 'keyword' :
+    /^[A-Z][A-Z0-9_]+$/.test(data.text) ? 'constant' : 'variable');
+  el.dataset.kind = kind;
+  el.dataset.icon = ({ function: 'ƒ', keyword: 'K', file: '#', constant: 'C', field: 'm', type: 'T' })[kind] || 'v';
+  const name = document.createElement('span');
+  name.className = 'hint-label';
+  const prefix = data.matchPrefix || '';
+  if (prefix && label.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const match = document.createElement('span');
+    match.className = 'hint-match';
+    match.textContent = label.slice(0, prefix.length);
+    name.appendChild(match);
+    name.appendChild(document.createTextNode(label.slice(prefix.length)));
+  } else name.textContent = label;
+  el.appendChild(name);
+  el.title = label + (data.detail ? ' — ' + data.detail : '');
   if (data.detail) {
     const d = document.createElement('span');
     d.className = 'hint-detail';
@@ -1591,7 +1650,25 @@ function gatherCompletions(cm, deliver) {
 // show-hint 的异步 hint：列表打开期间每次输入都按当前光标重新计算
 function editorHint(cm, callback) {
   gatherCompletions(cm, (data, final) => {
-    if (data && data.list.length) { callback(data); return; }
+    if (data && data.list.length) {
+      const prefix = cm.getRange(data.from, data.to);
+      data.list = data.list.map(item => Object.assign({}, typeof item === 'string' ? { text: item } : item,
+        { render: renderCompletionItem, matchPrefix: prefix }));
+      const cs = cm.state.completionActive, selected = cs && cs.selectedCompletionText;
+      const textOf = item => typeof item === 'string' ? item : item.text;
+      if (selected != null) {
+        const index = data.list.findIndex(item => textOf(item) === selected);
+        if (index >= 0) data.selectedHint = index;
+        else cs.selectedCompletionText = null;
+      }
+      CodeMirror.on(data, 'select', item => {
+        const active = cm.state.completionActive;
+        // The initial select signal runs inside the widget constructor, before assignment.
+        // Later signals represent navigation; retain that item through IME/clangd refreshes.
+        if (active && active.widget && active.widget.data === data) active.selectedCompletionText = textOf(item);
+      });
+      callback(data); return;
+    }
     // 没有可显示的：先藏起旧列表（避免选中过期候选）；确定没有时结束这次补全，下次输入再判断
     callback(null);
     if (final) setTimeout(() => { const cs = cm.state.completionActive; if (cs && !cs.widget) cm.closeHint(); }, 0);
@@ -1675,11 +1752,17 @@ function bindAutoComplete() {
     if (!tabDuringCompose) return;
     tabDuringCompose = false;
     const doc = editor.getDoc();
+    const completion = editor.state.completionActive;
     setTimeout(() => {
-      if (editor.getDoc() !== doc || !editor.hasFocus()) return;
+      if (editor.getDoc() !== doc || !editor.hasFocus() || editor.state.completionActive !== completion) return;
       const cs = editor.state.completionActive;
       if (cs && typeof cs.update === 'function') cs.update();
-      setTimeout(() => { if (editor.getDoc() === doc && editor.hasFocus()) acceptCompletion(editor); }, 30);
+      const position = completionState(editor);
+      setTimeout(() => {
+        const now = completionState(editor);
+        if (editor.getDoc() === doc && editor.hasFocus() && editor.state.completionActive === completion
+            && now.key === position.key && now.prefix === position.prefix && now.cur.ch === position.cur.ch) acceptCompletion(editor);
+      }, 30);
     }, 0);
   });
   input.addEventListener('blur', () => { tabDuringCompose = false; });
@@ -1705,6 +1788,33 @@ function bindAutoComplete() {
   const keepFocus = (e) => { if (e.target && e.target.closest && e.target.closest('.CodeMirror-hints')) e.preventDefault(); };
   document.addEventListener('pointerdown', keepFocus, true);
   document.addEventListener('mousedown', keepFocus, true);
+  let touch = null, acceptedPointer = null;
+  document.addEventListener('pointerdown', event => {
+    touch = null; acceptedPointer = null;
+    const item = event.target.closest && event.target.closest('.CodeMirror-hint');
+    const cs = editor.state.completionActive;
+    if (event.pointerType === 'mouse' || !item || !cs || !cs.widget || !cs.widget.hints.contains(item)) return;
+    touch = {id:event.pointerId, x:event.clientX, y:event.clientY, item, widget:cs.widget, doc:editor.getDoc()};
+  }, true);
+  document.addEventListener('pointermove', event => {
+    if (touch && event.pointerId === touch.id && Math.hypot(event.clientX-touch.x,event.clientY-touch.y) > 10) touch = null;
+  }, true);
+  document.addEventListener('pointercancel', () => { touch = null; }, true);
+  document.addEventListener('pointerup', event => {
+    const tap = touch; touch = null;
+    const cs = editor.state.completionActive;
+    if (!tap || event.pointerId !== tap.id || editor.getDoc() !== tap.doc || !cs || cs.widget !== tap.widget
+        || !tap.item.contains(event.target)) return;
+    event.preventDefault();
+    acceptedPointer = tap.id;
+    tap.widget.changeActive(tap.item.hintId);
+    acceptCompletion(editor);
+  }, true);
+  document.addEventListener('click', event => {
+    if (acceptedPointer !== null && event.pointerType === 'touch' && event.pointerId === acceptedPointer) {
+      acceptedPointer = null; event.preventDefault(); event.stopPropagation();
+    }
+  }, true);
 }
 
 // ── Copy with formatting (like VSCode: syntax colors go into the clipboard as HTML) ──
@@ -1745,16 +1855,16 @@ function themeTokenColor(word) {
 }
 // 富文本复制外层底色/前景：经典主题保持 1.0.x 原值，其它主题取 --ed-bg / --ed-fg
 function copyBgColor() {
-  if (document.documentElement.dataset.theme !== 'modern') return '#181818';
+  if (document.documentElement.dataset.theme === 'classic') return '#181818';
   return getComputedStyle(document.documentElement).getPropertyValue('--ed-bg').trim() || '#181818';
 }
 function copyFgColor() {
-  if (document.documentElement.dataset.theme !== 'modern') return '#d6d6dd';
+  if (document.documentElement.dataset.theme === 'classic') return '#d6d6dd';
   return getComputedStyle(document.documentElement).getPropertyValue('--ed-fg').trim() || '#d6d6dd';
 }
 function tokenColor(type){
   if (!type) return null;
-  const classic = document.documentElement.dataset.theme !== 'modern';
+  const classic = document.documentElement.dataset.theme === 'classic';
   for (const w of type.split(/\s+/)) {
     if (!classic) { const c = themeTokenColor(w); if (c) return c; continue; }
     if (TOKEN_COLORS[w]) return TOKEN_COLORS[w];
@@ -2202,6 +2312,7 @@ const COMMANDS = {
   'edit.replace':      { label: '替换', key: 'Ctrl+H', skipInField: true, run: () => editorSearch('replace') },
   'edit.complete':     { label: '代码补全', key: 'Ctrl+Space', skipInField: true, run: () => triggerCompletion() },
   'edit.autoComplete': { label: '输入时自动补全', checked: () => autoCompleteEnabled(), run: () => toggleAutoComplete() },
+  'edit.recoverInput': { label: '恢复编辑器输入', run: () => recoverEditorInput() },
   'view.explorer':     { label: '资源管理器', key: 'Ctrl+B', run: () => toggleSideView('files'), checked: () => !document.getElementById('explorer').hidden && sideView() === 'files' },
   'view.panel':        { label: '底部面板', key: 'Ctrl+J', run: () => togglePanel(), checked: () => document.getElementById('outputPanel').dataset.open === 'true' },
   'view.search':       { label: '在项目中搜索', key: 'Ctrl+Shift+F', run: () => openProjectSearch() },
@@ -2212,22 +2323,23 @@ const COMMANDS = {
   'panel.tasks':       { label: '任务', run: () => switchPanelView('tasks') },
   'view.fontUp':       { label: '增大编辑器字号', key: 'Ctrl+=', run: () => adjustFont(1) },
   'view.fontDown':     { label: '减小编辑器字号', key: 'Ctrl+-', run: () => adjustFont(-1) },
-  'view.theme':        { label: '切换主题（经典/现代）', run: () => toggleTheme() },
+  'view.theme':        { label: '切换主题（经典/现代/纯黑）', run: () => toggleTheme() },
   'debug.start':       { label: '开始调试', key: 'F5', when: debugEnabled, run: () => debugCode() },
   'help.toolchain':    { label: '导入本地运行库', run: () => pickToolchain() },
   'help.deps':         { label: '导入离线依赖包', run: () => pickDependencyPackage() },
   'help.settings':     { label: '设置…', key: 'Ctrl+,', run: () => openSettings() },
   'help.shortcuts':    { label: '键盘快捷键', run: () => openShortcuts() },
   'help.palette':      { label: '命令面板', key: 'Ctrl+Shift+P', run: () => openCommandPalette() },
-  'help.about':        { label: '关于 Doge IDE+', run: () => openAbout() }
+  'help.about':        { label: '关于 Doge IDE+', run: () => openAbout() },
+  'help.inputDiagnostics': { label: '输入诊断…', run: () => openEditorInputDiagnostics() }
 };
 const MENUS = [
   { id: 'file', label: '文件', items: ['file.newFile','file.newProject','file.open','file.save','file.renameProject','-','file.renameFile','file.closeFile','file.delete'] },
-  { id: 'edit', label: '编辑', items: ['edit.find','edit.replace','-','edit.complete','edit.autoComplete'] },
+  { id: 'edit', label: '编辑', items: ['edit.find','edit.replace','-','edit.complete','edit.autoComplete','-','edit.recoverInput'] },
   { id: 'run',  label: '运行', items: ['run.run','run.testInput','run.cancel','-','run.clear'] },
   { id: 'view', label: '视图', items: ['view.explorer','view.search','view.panel','view.stdin','panel.problems','panel.output','panel.terminal','panel.tasks','-','view.fontUp','view.fontDown','-','view.theme'] },
   { id: 'debug',label: '调试', items: ['debug.start'], when: debugEnabled },
-  { id: 'help', label: '帮助', items: ['help.palette','help.shortcuts','-','help.toolchain','help.deps','-','help.settings','help.about'] }
+  { id: 'help', label: '帮助', items: ['help.palette','help.shortcuts','-','help.toolchain','help.deps','-','help.settings','help.inputDiagnostics','help.about'] }
 ];
 const RAIL = [
   { id: 'explorer', label: '资源管理器', key: 'Ctrl+B', run: () => toggleSideView('files'),
@@ -2413,14 +2525,14 @@ function adjustFont(delta) {
   applyCodeSize();
 }
 function toggleTheme() {
-  const next = currentTheme() === 'modern' ? 'classic' : 'modern';
+  const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
   setSetting('theme', next); applyTheme(next);
-  showToast('已切换到' + (next === 'modern' ? '现代' : '经典') + '主题', 'success');
+  showToast('已切换到' + ({ modern: '现代', classic: '经典', black: '纯黑' })[next] + '主题', 'success');
 }
 
 // ═══ 批次 5：快捷键表 / 关于 / 编辑器查找 / 项目内搜索 ═══════════════
 // 版本号与 android/app/build.gradle 的 versionName 保持一致（有单测守护）
-const APP_VERSION = '1.1.2';
+const APP_VERSION = '1.1.9';
 // CodeMirror 自己处理、不经过 COMMANDS 的按键，只用于快捷键表展示
 const EDITOR_SHORTCUTS = [
   { label: '撤销 / 重做', key: 'Ctrl+Z / Ctrl+Y' },
@@ -2892,6 +3004,8 @@ function renameProjectFile(path) {
     const next = dir + name;
     if (getProjectFile(next)) { showToast('文件已存在：' + name, 'error'); return; }
     if (target === currentFilePath) saveCurrentFile();
+    // 保留目录中的原路径，连续改名也只需在保存时改一次。
+    if (!file.originalPath) file.originalPath = target;
     file.path = next;
     const oi = openFiles.indexOf(target); if (oi >= 0) openFiles[oi] = next;
     if (projectDocs.has(target)) { projectDocs.set(next, projectDocs.get(target)); projectDocs.delete(target); }
@@ -3260,20 +3374,6 @@ function initEditor() {
     }
   });
   applyEditorPreferences();
-  editor.getWrapperElement().addEventListener('keyup', event => {
-    if (event.key !== 'Tab' || editor.getOption('readOnly')) return;
-    // Android WebView can leave indentation selected in CodeMirror's hidden input.
-    setTimeout(() => {
-      const cursor = editor.getCursor('end');
-      editor.setSelection(cursor, cursor, { scroll: false });
-      const input = editor.getInputField();
-      if (input && typeof input.value === 'string' && document.activeElement === input
-          && typeof input.setSelectionRange === 'function') {
-        const end = input.value.length;
-        input.setSelectionRange(end, end);
-      }
-    }, 0);
-  }, true);
   loadSavedHashes();
   loadOpenFiles();
   if (getProjectFile(currentFilePath)) editor.swapDoc(docFor(currentFilePath));
@@ -3298,6 +3398,7 @@ function initEditor() {
   bindBracketInput();
   bindAutoComplete();
   bindRichCopy();
+  bindEditorTypingMotion();
   updateEditorAvailability();
   scheduleLint();
 }
@@ -3459,6 +3560,28 @@ window.projectSaveResult = function(ok, message) {
   if (sameProject) {
     if (ok) {
       pendingDiskSave = false;
+      const written = JSON.parse(request.json);
+      for (const file of project.files) {
+        const saved = written.files.find(f => f.path === file.path && f.originalPath === file.originalPath);
+        if (saved) delete file.originalPath;
+        else if (file.originalPath) {
+          // 保存排队期间再次改名：下次应从本次实际写入的路径继续改。
+          const prior = written.files.find(f => f.originalPath === file.originalPath);
+          if (prior) file.originalPath = prior.path;
+        }
+      }
+      persistProject();
+      if (next && next.session === projectSaveSession) {
+        const queued = JSON.parse(next.json);
+        for (const file of queued.files) {
+          const saved = written.files.find(f => f.originalPath && f.originalPath === file.originalPath);
+          if (saved) {
+            if (saved.path === file.path) delete file.originalPath;
+            else file.originalPath = saved.path;
+          }
+        }
+        next.json = JSON.stringify(queued);
+      }
       savedHashes = request.hashes;
       persistSavedHashes();
       renderEditorTabs();
@@ -4774,9 +4897,9 @@ function applyCodeSize() {
   if (editor) editor.refresh();
 }
 
-const THEMES = ['classic', 'modern'];
+const THEMES = ['classic', 'modern', 'black'];
 // 现代主题顶栏底色 #16161e 与经典一致，切换时同步 <meta theme-color> 与状态栏底色
-const THEME_META = { classic: '#16161e', modern: '#16161e' };
+const THEME_META = { classic: '#16161e', modern: '#16161e', black: '#000000' };
 function currentTheme() {
   const t = getSetting('theme', 'modern');
   return THEMES.indexOf(t) >= 0 ? t : 'modern';
@@ -4973,6 +5096,7 @@ function loadSettingsForm() {
   document.getElementById('autoCloseBracketsInput').checked = getSetting('autoCloseBrackets', '1') !== '0';
   const ligatures = document.getElementById('symbolLigaturesInput');
   if (ligatures) ligatures.checked = getSetting('symbolLigatures', '0') === '1';
+  document.getElementById('smoothCaretInput').checked = getSetting('smoothCaret', '1') !== '0';
   const fullwidth = document.getElementById('fullwidthSymbolLintInput');
   if (fullwidth) fullwidth.checked = getSetting('fullwidthSymbolLint', '1') !== '0';
 }
@@ -5013,6 +5137,7 @@ function saveSettings() {
   setSetting('autoCloseBrackets', document.getElementById('autoCloseBracketsInput').checked ? '1' : '0');
   const ligatures = document.getElementById('symbolLigaturesInput');
   if (ligatures) setSetting('symbolLigatures', ligatures.checked ? '1' : '0');
+  setSetting('smoothCaret', document.getElementById('smoothCaretInput').checked ? '1' : '0');
   const fullwidth = document.getElementById('fullwidthSymbolLintInput');
   if (fullwidth) setSetting('fullwidthSymbolLint', fullwidth.checked ? '1' : '0');
   saveProject();
@@ -5109,10 +5234,73 @@ function finishEditorComposition(cm) {
 }
 function bindEditorInputContinuity() {
   const cm = editor, input = cm.getInputField();
+  const restoreFocus = (preserveInput = false) => {
+    if (document.hidden || !cm.hasFocus() || cm.state.focused || cm.getOption('readOnly') === 'nocursor') return;
+    const bridge = cm.display.input;
+    const pending = preserveInput ? {value:input.value, prevInput:bridge.prevInput,
+      start:input.selectionStart, end:input.selectionEnd, direction:input.selectionDirection} : null;
+    // Window focus may return without another textarea focus event (Android hardware keyboards).
+    // Run CodeMirror's focus handler so it resumes polling, cursor blinking and focus notifications.
+    input.dispatchEvent(new FocusEvent('focus'));
+    if (pending) {
+      input.value = pending.value;
+      bridge.prevInput = pending.prevInput;
+      input.setSelectionRange(pending.start, pending.end, pending.direction);
+    }
+  };
+  window.addEventListener('blur', () => finishEditorComposition(cm), true);
+  window.addEventListener('focus', () => restoreFocus());
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) finishEditorComposition(cm);
+    else restoreFocus();
+  });
+  // Some WebViews deliver the next key/input before a window focus event.
+  input.addEventListener('keydown', () => restoreFocus(), true);
+  input.addEventListener('beforeinput', () => restoreFocus(), true);
+  input.addEventListener('input', () => restoreFocus(true), true);
+  const resumeComposition = event => {
+    const bridge = cm.display.input;
+    if (bridge.composing || cm.isReadOnly() || !cm.hasFocus() || cm.getOption('disableInput')) return;
+    // An IME can continue with compositionupdate/beforeinput after a native pair deletion
+    // without sending another compositionstart. Let CodeMirror track that range again.
+    if (event.type === 'compositionupdate' || event.isComposing || event.inputType === 'insertCompositionText') {
+      input.dispatchEvent(new CompositionEvent('compositionstart', {bubbles:true, data:event.data || ''}));
+    }
+  };
+  input.addEventListener('compositionupdate', resumeComposition, true);
+  input.addEventListener('beforeinput', resumeComposition, true);
+  input.addEventListener('input', resumeComposition, true);
+  input.addEventListener('input', event => {
+    if (cm.display.input.composing && event.isComposing === false
+        && /^(insertText|insertReplacementText|insertFromPaste)$/.test(event.inputType)) {
+      // Some IMEs commit with an input event but omit compositionend. Flush through
+      // CodeMirror's own handler so pairing and deferred Tab acceptance also finish.
+      finishEditorComposition(cm);
+    }
+  }, true);
   input.addEventListener('blur', () => finishEditorComposition(cm), true);
+  cm.on('cursorActivity', () => {
+    const bridge = cm.display.input, display = cm.display;
+    if (!display.selForContextMenu || display.selForContextMenu === cm.doc.sel) return;
+    if (bridge.contextMenuPending) { bridge.contextMenuPending(); bridge.reset(); }
+    clearTimeout(display.detectingSelectAll);
+    display.detectingSelectAll = null;
+    display.selForContextMenu = null;
+  });
+  input.addEventListener('compositionend', () => {
+    const bridge = cm.display.input;
+    if (bridge.composing || cm.isReadOnly() || !cm.hasFocus() || cm.somethingSelected()
+        || bridge.contextMenuPending || cm.display.selForContextMenu || cm.getOption('disableInput')) return;
+    // The candidate is now committed. A leftover native selection would replace those
+    // characters on the next key even though CodeMirror shows only an insertion cursor.
+    if (bridge.prevInput === input.value && input.selectionStart !== input.selectionEnd) {
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  });
   input.addEventListener('input', event => {
     const bridge = cm.display.input;
-    if (event.isComposing || bridge.composing || cm.isReadOnly() || !cm.hasFocus() || cm.somethingSelected()) return;
+    if (event.isComposing || bridge.composing || cm.isReadOnly() || !cm.hasFocus()) return;
+    if (cm.somethingSelected() && !(event.isComposing === false && /^insert/.test(event.inputType))) return;
     if (bridge.contextMenuPending || cm.display.selForContextMenu || cm.getOption('disableInput') || cm.state.keySeq) return;
     // TextareaInput.poll skips native selected text when prevInput is empty.
     // Once IME text is committed, that hidden selection must not block the document update.
@@ -5121,23 +5309,243 @@ function bindEditorInputContinuity() {
       bridge.poll();
     }
   });
+  bindAndroidEditorInput(cm);
 }
+const editorInputEvents = [];
+const editorInputTransitions = [];
+let lastEditorInputDeletion = null, lastEditorInputReplacement = null, editorInputEventId = 0;
+let editorInputSyncId = 0, pendingEditorInputSync = null;
+function editorDOMSelection(cm) {
+  // DOM selection does not expose Blink's internal textarea selection. Keep both
+  // views in diagnostics, without text, class names, ids, or project paths.
+  try {
+    const selection = document.getSelection(), input = cm.getInputField(), wrapper = cm.getWrapperElement();
+    const nodeState = node => {
+      if (!node) return null;
+      const element = node.nodeType === 1 ? node : node.parentElement;
+      const role = node === input || input.contains(node) ? 'editor-input'
+        : element && element.closest('.CodeMirror-code') && wrapper.contains(element) ? 'editor-code'
+        : wrapper.contains(node) ? 'editor' : node === document ? 'document' : 'outside-editor';
+      return {type:node.nodeType,role,connected:node.isConnected,tree:node.getRootNode() === document ? 'document' : 'other'};
+    };
+    if (!selection) return {unavailable:true};
+    const ranges = [];
+    for (let i=0;i<Math.min(selection.rangeCount,2);i++) {
+      const range = selection.getRangeAt(i);
+      ranges.push({start:nodeState(range.startContainer),startOffset:range.startOffset,
+        end:nodeState(range.endContainer),endOffset:range.endOffset,collapsed:range.collapsed});
+    }
+    return {rangeCount:selection.rangeCount,collapsed:selection.isCollapsed,
+      anchor:nodeState(selection.anchorNode),anchorOffset:selection.anchorOffset,
+      focus:nodeState(selection.focusNode),focusOffset:selection.focusOffset,ranges};
+  } catch (error) { return {unavailable:true}; }
+}
+function editorInputState(cm) {
+  const input = cm.getInputField(), bridge = cm.display.input;
+  return {focused:cm.state.focused,active:cm.hasFocus(),windowFocused:document.hasFocus(),hidden:document.hidden,
+    readOnly:cm.isReadOnly(),disableInput:!!cm.getOption('disableInput'),selected:cm.somethingSelected(),
+    selections:cm.listSelections().slice(0,4).map(s=>({anchor:s.anchor,head:s.head})),
+    nativeLength:input.value.length,previousLength:bridge.prevInput.length,
+    nativeSelection:[input.selectionStart,input.selectionEnd],domSelection:editorDOMSelection(cm),composing:!!bridge.composing,
+    resetting:!!bridge.resetting,contextMenu:!!bridge.contextMenuPending,keySequence:!!cm.state.keySeq};
+}
+function recordEditorInput(cm, type, details = {}) {
+  const event = {id:++editorInputEventId,time:Date.now(),type,...details,state:editorInputState(cm)};
+  if (lastEditorInputDeletion && lastEditorInputDeletion.after.length < 40) lastEditorInputDeletion.after.push(event);
+  if (lastEditorInputReplacement && lastEditorInputReplacement.after.length < 40) lastEditorInputReplacement.after.push(event);
+  if (type === 'document-change' && details.insertedLength === 0 && details.removedLength >= 2
+      && /^(\+input|\+delete|cut)$/.test(details.origin || '')) {
+    lastEditorInputDeletion = {time:event.time,trigger:event,before:editorInputEvents.slice(-24),after:[]};
+  }
+  if (type === 'document-change' && details.insertedLength > 0 && details.removedLength > 0
+      && /^(\+input|\*compose|paste)$/.test(details.origin || '')) {
+    lastEditorInputReplacement = {time:event.time,trigger:event,before:editorInputEvents.slice(-24),after:[]};
+  }
+  editorInputEvents.push(event);
+  if (editorInputEvents.length > 100) editorInputEvents.shift();
+  if (type.startsWith('native-sync') || type === 'range-delete' || type === 'range-replace' || type === 'input-focus-rebuild'
+      || lastEditorInputDeletion && lastEditorInputDeletion.trigger === event) {
+    editorInputTransitions.push(event);
+    if (editorInputTransitions.length > 80) editorInputTransitions.shift();
+  }
+  return event;
+}
+function editorDiagnosticKeyCode(code) {
+  // Printable key codes would reveal typed characters. Unknown/IME 229 and
+  // navigation/deletion/modifier codes distinguish the paths without that text.
+  return [0,8,9,13,16,17,18,20,27,33,34,35,36,37,38,39,40,45,46,91,92,93,144,145,224,229].includes(code) ? code : -1;
+}
+function requestAndroidInputSync(cm, reason) {
+  if (!(window.DogeNative && DogeNative.syncEditorInput)) return;
+  const id = editorInputSyncId = editorInputSyncId % 2147483646 + 1;
+  const selection = cm.listSelections().map(s=>[s.anchor.line,s.anchor.ch,s.head.line,s.head.ch]);
+  pendingEditorInputSync = {id,cm,doc:cm.getDoc(),selection,generation:cm.changeGeneration(),reason};
+  recordEditorInput(cm,'native-sync-request',{id,reason});
+  try { DogeNative.syncEditorInput(id); }
+  catch (error) { pendingEditorInputSync = null; recordEditorInput(cm,'native-sync-error',{id}); }
+}
+window.confirmEditorInputSync = function(id) {
+  const request = pendingEditorInputSync;
+  if (!request || request.id !== id) return false;
+  pendingEditorInputSync = null;
+  const cm = request.cm;
+  const selection = cm.listSelections().map(s=>[s.anchor.line,s.anchor.ch,s.head.line,s.head.ch]);
+  const valid = editor === cm && cm.getDoc() === request.doc && cm.changeGeneration() === request.generation
+    && JSON.stringify(selection) === JSON.stringify(request.selection) && cm.hasFocus() && !document.hidden && !cm.isReadOnly()
+    && !cm.getOption('disableInput') && !cm.display.input.composing;
+  recordEditorInput(cm,'native-sync-confirm',{id,valid});
+  if (valid) {
+    // restartInput alone can keep Chromium attached to the stale editing context.
+    // Actually leave and re-enter the DOM input before Android creates its connection.
+    const input = cm.getInputField();
+    input.blur();
+    try { input.focus({preventScroll:true}); } catch (error) { input.focus(); }
+    if (cm._syncTypingMotion) cm._syncTypingMotion();
+    recordEditorInput(cm,'input-focus-rebuild',{id});
+    // Blur cancels the automatic-completion timer started by inputRead. Resume
+    // it for the committed replacement after focus has been rebuilt.
+    if (request.reason.startsWith('range-replace') && autoCompleteEnabled()) scheduleAutoComplete(cm);
+    return cm.hasFocus() && !cm.isReadOnly() && cm.getDoc() === request.doc;
+  }
+  return valid;
+};
+window.editorInputSyncResult = function(id, restarted) {
+  if (editor) recordEditorInput(editor,'native-sync-result',{id,restarted});
+};
+function bindAndroidEditorInput(cm) {
+  const input = cm.getInputField();
+  let selectedComposition = null;
+  input.addEventListener('compositionstart', () => {
+    if (!(window.DogeNative && DogeNative.syncEditorInput)) return;
+    if (!selectedComposition && cm.somethingSelected()) {
+      selectedComposition = {doc:cm.getDoc(),generation:cm.changeGeneration()};
+    }
+  });
+  input.addEventListener('compositionend', () => {
+    const replacement = selectedComposition;
+    selectedComposition = null;
+    if (!replacement || cm.display.input.composing || replacement.doc !== cm.getDoc()
+        || cm.isReadOnly() || cm.getOption('disableInput') || !cm.hasFocus()
+        || cm.changeGeneration() === replacement.generation) return;
+    // A hardware keyboard can still be mediated by an IME. Reconnect only after
+    // its replacement is committed, never while the candidate is being edited.
+    requestAndroidInputSync(cm,'range-replace-compose');
+  });
+  input.addEventListener('blur', () => { selectedComposition = null; });
+  cm.on('swapDoc', () => { selectedComposition = null; });
+  cm.on('keyHandled',(instance,key,event) => {
+    recordEditorInput(cm,'key-handled',{key:['Backspace','Delete','Tab','Enter','Esc'].includes(key) ? key : 'other-binding'});
+  });
+  cm.on('changes',(instance,changes) => {
+    if (cm.isReadOnly() || cm.getOption('disableInput') || cm.display.input.composing) return;
+    if (!(window.DogeNative && DogeNative.syncEditorInput)) return;
+    // Inspect the committed edit, not the IME event label or a transient selection.
+    // Sogou can report an empty insertText before the eventual Backspace keydown.
+    const removedLength = changes.reduce((total,change) => total +
+      (/^(\+input|\+delete|cut)$/.test(change.origin || '') && change.text.join('\n') === ''
+        ? change.removed.join('\n').length : 0),0);
+    const followsPendingDeletion = pendingEditorInputSync && pendingEditorInputSync.cm === cm
+      && pendingEditorInputSync.doc === cm.getDoc();
+    const replacedLength = changes.reduce((total,change) => total +
+      (/^(\+input|paste)$/.test(change.origin || '') && change.text.join('\n') !== ''
+        ? change.removed.join('\n').length : 0),0);
+    if (replacedLength) {
+      recordEditorInput(cm,'range-replace',{removedLength:replacedLength});
+      requestAndroidInputSync(cm,'range-replace');
+    } else if (removedLength >= (followsPendingDeletion ? 1 : 2)) {
+      recordEditorInput(cm,'range-delete',{removedLength});
+      requestAndroidInputSync(cm,'range-delete');
+    }
+  });
+  for (const type of ['keydown','keyup','beforeinput','input','compositionstart','compositionupdate','compositionend','focus','blur']) {
+    input.addEventListener(type,event => {
+      const details = {};
+      if (type === 'keydown' || type === 'keyup') {
+        details.key = ['Backspace','Delete','Tab','Enter','Escape','Shift','Control','Alt','Meta','ArrowLeft','ArrowRight','ArrowUp','ArrowDown',
+          'Home','End','PageUp','PageDown','CapsLock','NumLock','ScrollLock','Unidentified','Dead','Process','Compose'].includes(event.key) ? event.key : 'text-or-navigation';
+        details.keyCode = editorDiagnosticKeyCode(event.keyCode);
+        details.which = editorDiagnosticKeyCode(event.which);
+        details.modifiers = [event.ctrlKey,event.altKey,event.shiftKey,event.metaKey];
+      }
+      details.trusted = event.isTrusted;
+      details.cancelable = event.cancelable;
+      details.defaultPreventedAtCapture = event.defaultPrevented;
+      if (event.inputType) details.inputType = event.inputType.slice(0,64);
+      if ('data' in event) details.dataLength = typeof event.data === 'string' ? event.data.length : null;
+      if ('isComposing' in event) details.eventComposing = event.isComposing;
+      const recorded = recordEditorInput(cm,type,details);
+      // Document-level handlers run after this input listener. Observe their
+      // final result after dispatch; diagnostics never cancel or change the event.
+      setTimeout(() => {
+        recorded.defaultPreventedAfterDispatch = event.defaultPrevented;
+        recorded.stateAfterDispatch = editorInputState(cm);
+      },0);
+    },true);
+  }
+  cm.on('change',(instance,change)=>recordEditorInput(cm,'document-change',{origin:change.origin || 'unknown',
+    insertedLength:change.text.join('\n').length,removedLength:change.removed.join('\n').length}));
+}
+function recoverEditorInput() {
+  if (!editor || editor.isReadOnly()) { showToast('请先打开可编辑的文件','info'); return; }
+  editor.focus();
+  finishEditorComposition(editor);
+  editor.display.input.poll();
+  editor.display.input.reset();
+  requestAndroidInputSync(editor,'manual');
+  showToast('已请求重新同步编辑器输入','info');
+}
+function openEditorInputDiagnostics() {
+  let native = null;
+  try { if (window.DogeNative && DogeNative.editorInputDiagnostics) native = JSON.parse(DogeNative.editorInputDiagnostics()); } catch (error) { native = {unavailable:true}; }
+  const text = JSON.stringify({schemaVersion:2,version:APP_VERSION,webView:webViewVersion(),capturedAt:new Date().toISOString(),
+    current:editor && editorInputState(editor),native,transitions:editorInputTransitions.slice(),
+    lastDeletion:lastEditorInputDeletion,lastReplacement:lastEditorInputReplacement,events:editorInputEvents.slice()},null,2);
+  const box = document.createElement('div');
+  box.className = 'modal dialog';
+  box.innerHTML = '<h3>输入诊断</h3><div class="dialog-body"><p>记录按键类型、输入长度与焦点状态，不包含源码或输入文字。</p><textarea class="dialog-input input-diagnostic-log" readonly aria-label="输入诊断记录"></textarea></div><div class="dialog-foot"><button type="button" class="copy-input-diagnostics">复制诊断</button><button type="button" class="close-btn">关闭</button></div>';
+  box.querySelector('textarea').value = text;
+  const close = openDynamicDialog(box);
+  box.querySelector('.close-btn').onclick = close;
+  box.querySelector('.copy-input-diagnostics').onclick = () => copyText(text);
+  setTimeout(()=>box.querySelector('.copy-input-diagnostics').focus(),0);
+}
+const EDITOR_PAIR_CHARACTERS = "()[]{}''\"\"``‘’“”（）［］｛｝【】「」『』《》";
 function bindBracketInput() {
   const cm = editor, input = cm.getInputField();
-  const pairs = {'(':')','[':']','{':'}'};
+  const pairs = {}, closing = new Set(), symmetric = new Set();
+  for (let i = 0; i < EDITOR_PAIR_CHARACTERS.length; i += 2) {
+    const left = EDITOR_PAIR_CHARACTERS[i], right = EDITOR_PAIR_CHARACTERS[i+1];
+    pairs[left] = right; closing.add(right);
+    if (left === right) symmetric.add(left);
+  }
   let composing = false, pending = null;
   const complete = change => {
     if (!cm.getOption('autoCloseBrackets') || cm.getOption('readOnly') || cm.listSelections().length !== 1) return;
     if (!change || !['+input','*compose'].includes(change.origin) || change.text.length !== 1 || change.text[0].length !== 1) return;
     const char = change.text[0], from = change.from, end = CodeMirror.Pos(from.line, from.ch + 1), cursor = cm.getCursor();
-    if (!pairs[char] && !')]}'.includes(char)) return;
+    if (!pairs[char] && !closing.has(char)) return;
     if (cursor.line !== end.line || cursor.ch !== end.ch || cm.getRange(from,end) !== char) return;
     const next = cm.getRange(end,CodeMirror.Pos(end.line,end.ch+1));
+    const before = cm.getLine(from.line).slice(0,from.ch);
+    // Escaped quotes and apostrophes inside words remain literal characters.
+    if (symmetric.has(char) && /(?:^|[^\\])(?:\\\\)*\\$/.test(before)) return;
+    let action = '';
+    if (closing.has(char) && next === char) {
+      const token = cm.getTokenAt(end, true);
+      const startsString = symmetric.has(char) && /\bstring\b/.test(token.type || '')
+        && token.start === end.ch && !/\bstring\b/.test(cm.getTokenTypeAt(from) || '');
+      if (!startsString) action = 'skip';
+    }
+    if (!action && pairs[char] && (!next || /[\s)\]}'":;>）］｝】」』》’”]/.test(next))) {
+      if (symmetric.has(char) && (before.endsWith(char) || CodeMirror.isWordChar(before.slice(-1)) || CodeMirror.isWordChar(next))) return;
+      action = 'pair';
+    }
+    if (!action) return;
     cm.operation(() => {
-      if (pairs[char] && (!next || /[\s)\]}'":;>]/.test(next))) {
+      if (action === 'pair') {
         cm.replaceRange(pairs[char],end,end,'+input');
         cm.setCursor(end);
-      } else if (')]}'.includes(char) && next === char) {
+      } else {
         cm.replaceRange('',from,end,'+input');
         cm.setCursor(end);
       }
@@ -5151,6 +5559,9 @@ function bindBracketInput() {
   });
   input.addEventListener('blur',() => {composing=false;pending=null;});
   cm.on('swapDoc',() => {composing=false;pending=null;});
+  cm.on('optionChange',(instance,option) => {
+    if (option === 'mode') instance.setOption('autoCloseBrackets', editorBracketOptions());
+  });
   cm.on('beforeChange',(instance,change) => {
     if (composing || !cm.getOption('autoCloseBrackets') || cm.getOption('readOnly') || cm.listSelections().length !== 1) return;
     if (change.origin !== '+input' || change.text.length !== 1 || !pairs[change.text[0]]) return;
@@ -5163,7 +5574,63 @@ function bindBracketInput() {
   });
 }
 function editorBracketOptions() {
-  return getSetting('autoCloseBrackets', '1') === '0' ? false : {pairs:"()[]{}''\"\"",closeBefore:")]}'\":;>"};
+  return getSetting('autoCloseBrackets', '1') === '0' ? false : {
+    pairs:EDITOR_PAIR_CHARACTERS,closeBefore:")]}'\":;>）］｝】」』》’”",override:true,
+    triples:languageForPath(currentFilePath).id === 'python' ? "'\"" : ''
+  };
+}
+function bindEditorTypingMotion() {
+  const cm = editor, wrapper = cm.getWrapperElement(), scroller = cm.getScrollerElement();
+  const caret = document.createElement('div');
+  caret.className = 'doge-smooth-caret';
+  caret.setAttribute('aria-hidden', 'true');
+  caret.hidden = true;
+  wrapper.appendChild(caret);
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let frame = 0, snapPending = true;
+  const hide = () => {
+    caret.hidden = true;
+    wrapper.classList.remove('doge-smooth-caret-active');
+  };
+  const draw = () => {
+    frame = 0;
+    if (getSetting('smoothCaret', '1') === '0' || reducedMotion.matches || document.hidden
+        || !cm.hasFocus() || !cm.state.focused || cm.somethingSelected()
+        || cm.listSelections().length !== 1 || cm.getOption('readOnly') === 'nocursor') {
+      hide(); return;
+    }
+    const pos = cm.cursorCoords(cm.getCursor(), 'window');
+    const bounds = wrapper.getBoundingClientRect(), viewport = scroller.getBoundingClientRect();
+    const gutterWidth = cm.getGutterElement().getBoundingClientRect().width, scroll = cm.getScrollInfo();
+    if (pos.left < viewport.left + gutterWidth || pos.left > viewport.left + scroll.clientWidth
+        || pos.bottom <= viewport.top || pos.top >= viewport.top + scroll.clientHeight) {
+      hide(); return;
+    }
+    // Keep one visual caret: CodeMirror rebuilds its native cursor nodes on every edit.
+    // Scroll, document and layout changes snap so the caret stays aligned with the text.
+    caret.style.transition = snapPending || caret.hidden ? 'none' : '';
+    caret.style.height = (pos.bottom - pos.top) + 'px';
+    caret.style.transform = 'translate(' + (pos.left - bounds.left - wrapper.clientLeft)
+      + 'px,' + (pos.top - bounds.top - wrapper.clientTop) + 'px)';
+    caret.hidden = false;
+    wrapper.classList.add('doge-smooth-caret-active');
+    snapPending = false;
+  };
+  const schedule = (snap = false) => {
+    snapPending = snapPending || snap;
+    if (!frame) frame = requestAnimationFrame(draw);
+  };
+  for (const event of ['cursorActivity', 'update']) cm.on(event, () => schedule());
+  for (const event of ['focus', 'scroll', 'refresh', 'swapDoc', 'optionChange']) cm.on(event, () => schedule(true));
+  cm.on('blur', hide);
+  window.addEventListener('blur', hide);
+  window.addEventListener('focus', () => schedule(true));
+  window.addEventListener('resize', () => schedule(true));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) hide(); else schedule(true); });
+  if (reducedMotion.addEventListener) reducedMotion.addEventListener('change', () => schedule(true));
+  else reducedMotion.addListener(() => schedule(true));
+  cm._syncTypingMotion = () => { hide(); schedule(true); };
+  schedule(true);
 }
 function applyEditorPreferences() {
   if (!editor) return;
@@ -5172,6 +5639,7 @@ function applyEditorPreferences() {
   wrapper.setAttribute('data-symbol-ligatures', getSetting('symbolLigatures', '0') === '1' ? 'on' : 'off');
   editor.setOption('autoCloseBrackets', editorBracketOptions());
   editor.refresh();
+  if (editor._syncTypingMotion) editor._syncTypingMotion();
 }
 function getSetting(key, defaultVal) {
   try {

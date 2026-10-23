@@ -71,7 +71,7 @@ public class MainActivity extends Activity {
     private static final int MAX_TOOLCHAIN_ENTRIES = 100000;
     private static final String PROJECT_MANIFEST = ".doge-project.json";
 
-    private WebView web;
+    private EditorWebView web;
     private LocalServer server;
     private DependencyManager dependencyManager;
     private boolean debug;
@@ -124,7 +124,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        web = new WebView(this);
+        web = new EditorWebView(this);
         web.setBackgroundColor(BG);
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         web.setHorizontalScrollBarEnabled(false);
@@ -246,6 +246,29 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void reportSoftwareError(String source, String message, String stack) {
             reportSoftwareErrorInternal(source, message, stack);
+        }
+        @JavascriptInterface
+        public void syncEditorInput(int requestId) {
+            if (requestId <= 0) return;
+            runOnUiThread(() -> {
+                final EditorWebView target = web;
+                if (target == null) return;
+                boolean focused = !destroyed && target.hasFocus() && target.hasWindowFocus();
+                target.noteEditorInputSync("sync-request", requestId, focused);
+                if (!focused) return;
+                target.evaluateJavascript("window.confirmEditorInputSync && window.confirmEditorInputSync(" + requestId + ")", confirmed -> {
+                    boolean current = !destroyed && web == target && "true".equals(confirmed);
+                    target.noteEditorInputSync("sync-confirm", requestId, current);
+                    if (!current) return;
+                    boolean restarted = target.restartEditorInput();
+                    target.evaluateJavascript("window.editorInputSyncResult && window.editorInputSyncResult("
+                            + requestId + "," + restarted + ")", null);
+                });
+            });
+        }
+        @JavascriptInterface
+        public String editorInputDiagnostics() {
+            return web == null ? "{}" : web.inputDiagnostics();
         }
         @JavascriptInterface
         public void pickToolchain() {
@@ -521,8 +544,42 @@ public class MainActivity extends Activity {
         java.util.HashSet<String> currentPaths = new java.util.HashSet<>();
         LinkedHashMap<String, byte[]> previousContents = new LinkedHashMap<>();
         ArrayList<Uri> createdDocuments = new ArrayList<>();
+        LinkedHashMap<String, String> renamedPaths = new LinkedHashMap<>();
         boolean committed = false;
         try {
+        // 先处理改名，再写入内容；原名称可以被新建文件重新使用。
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject file = files.optJSONObject(i);
+            if (file == null) continue;
+            String path = file.optString("path", "").replace('\\', '/');
+            String original = file.optString("originalPath", "").replace('\\', '/');
+            if (original.isEmpty() || original.equals(path)) continue;
+            if (!isSafeProjectPath(path) || !isSafeProjectPath(original)
+                    || ProjectFiles.isInternalManifestPath(path) || ProjectFiles.isInternalManifestPath(original))
+                throw new IOException("重命名路径无效: " + original);
+            int slash = path.lastIndexOf('/'), oldSlash = original.lastIndexOf('/');
+            if (!path.substring(0, slash + 1).equals(original.substring(0, oldSlash + 1)))
+                throw new IOException("重命名不能移动目录: " + path);
+            String oldId = findDocumentByPath(tree, original, rootId);
+            if (oldId == null) continue; // 新建后改名，或这次改名已经保存过。
+            if (findDocumentByPath(tree, path, rootId) != null) throw new IOException("文件已存在: " + path);
+            Uri renamed;
+            try {
+                renamed = DocumentsContract.renameDocument(getContentResolver(),
+                        DocumentsContract.buildDocumentUriUsingTree(tree, oldId), path.substring(slash + 1));
+                if (renamed == null) throw new IOException("无法重命名文件: " + original);
+            } catch (Exception renameError) {
+                if (original.equalsIgnoreCase(path)) throw new IOException("文件提供器不支持仅修改大小写: " + path, renameError);
+                // 不支持原生改名的提供器仍可使用写新文件、提交清单后删旧文件的流程。
+                Log.w(TAG, "provider rename unavailable, copying " + original, renameError);
+                continue;
+            }
+            // 提供器可能返回新的文档 ID；回滚必须使用这个 ID。
+            String renamedId = DocumentsContract.getDocumentId(renamed);
+            renamedPaths.put(renamedId, original);
+            if (!path.substring(slash + 1).equals(queryDisplayName(renamed)))
+                throw new IOException("文件提供器无法保留文件名: " + path);
+        }
         for (int i = 0; i < files.length(); i++) {
             JSONObject file = files.optJSONObject(i); if (file == null) continue;
             String path = file.optString("path", "").replace('\\', '/');
@@ -565,16 +622,22 @@ public class MainActivity extends Activity {
         if (project.has("dependencies")) manifest.put("dependencies", project.get("dependencies"));
         writeTextFile(tree, rootId, PROJECT_MANIFEST, manifest.toString(2));
         committed = true;
+        java.util.LinkedHashSet<String> stalePaths = new java.util.LinkedHashSet<>();
+        // 导入的目录可能还没有清单；显式改名的旧路径仍需清理。
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject file = files.optJSONObject(i);
+            if (file != null) stalePaths.add(file.optString("originalPath", ""));
+        }
         if (previousFiles != null) {
-            for (int i = 0; i < previousFiles.length(); i++) {
-                String oldPath = previousFiles.optString(i, "");
+            for (int i = 0; i < previousFiles.length(); i++) stalePaths.add(previousFiles.optString(i, ""));
+        }
+            for (String oldPath : stalePaths) {
                 if (!isSafeProjectPath(oldPath) || ProjectFiles.isInternalManifestPath(oldPath) || currentPaths.contains(oldPath)) continue;
                 try {
                     String oldId = findDocumentByPath(tree, oldPath, rootId);
                     if (oldId != null) DocumentsContract.deleteDocument(getContentResolver(), DocumentsContract.buildDocumentUriUsingTree(tree, oldId));
                 } catch (Exception cleanupError) { Log.w(TAG, "could not remove stale project file " + oldPath, cleanupError); }
             }
-        }
         } finally {
             if (!committed) {
                 for (Uri created : createdDocuments) {
@@ -582,6 +645,18 @@ public class MainActivity extends Activity {
                 }
                 for (Map.Entry<String, byte[]> entry : previousContents.entrySet()) {
                     try { String id = findDocumentByPath(tree, entry.getKey(), rootId); if (id != null) try (OutputStream output = getContentResolver().openOutputStream(DocumentsContract.buildDocumentUriUsingTree(tree, id), "wt")) { if (output != null) output.write(entry.getValue()); } } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not restore " + entry.getKey(), rollbackError); }
+                }
+                ArrayList<Map.Entry<String, String>> renames = new ArrayList<>(renamedPaths.entrySet());
+                java.util.Collections.reverse(renames);
+                for (Map.Entry<String, String> entry : renames) {
+                    try {
+                        String original = entry.getValue();
+                        Uri restored = DocumentsContract.renameDocument(getContentResolver(),
+                                DocumentsContract.buildDocumentUriUsingTree(tree, entry.getKey()),
+                                original.substring(original.lastIndexOf('/') + 1));
+                        if (restored == null || !original.substring(original.lastIndexOf('/') + 1).equals(queryDisplayName(restored)))
+                            throw new IOException("无法恢复文件名: " + original);
+                    } catch (Exception rollbackError) { Log.w(TAG, "project save rollback could not restore filename " + entry.getValue(), rollbackError); }
                 }
                 try {
                     if (previousManifestText != null) writeTextFile(tree, rootId, PROJECT_MANIFEST, previousManifestText);
@@ -958,9 +1033,7 @@ public class MainActivity extends Activity {
         }
         // 软键盘弹出时系统会先消费返回键；走到这里说明键盘已收起
         View focused = getCurrentFocus();
-        if (focused != null) {
-            focused.clearFocus();
-        }
+        // Hiding the IME must keep WebView focused so a hardware keyboard can continue typing.
         hideKeyboard(focused);
         long now = System.currentTimeMillis();
         if (now - lastBackAt < BACK_GRACE_MS) {

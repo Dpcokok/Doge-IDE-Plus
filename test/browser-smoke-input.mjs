@@ -11,11 +11,86 @@ async function reset(code='') {
 }
 
 try {
+  if (process.argv.includes('--android')) {
+    await send('Emulation.setUserAgentOverride',{userAgent:'Mozilla/5.0 (Linux; Android 14; Tablet) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',platform:'Linux armv8l'});
+    await browser.reload();
+  }
   await ev(`window.projectOpened({name:'Input',language:'python',files:[{path:'main.py',code:''},{path:'other.py',code:'other'}]});setSetting('autoComplete','0');editor.focus();true`);
   for (const text of ['(','a',')','[','b',']','\t','c']) {
     await typeText(text);
   }
   eq('brackets and input continue normally',await ev('editor.getValue()'),'(a)[b]\tc');
+
+  await reset('keep');
+  await ev(`window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));true`);
+  await key('x');await key('y');
+  eq('hardware typing resumes after window focus returns with the same active input',await ev('editor.getValue()'),'keepxy');
+  eq('editor focus state agrees with the active textarea after returning',await ev('editor.state.focused && document.activeElement===editor.getInputField()'),true);
+  await ev('editor.getInputField().blur();editor.focus();true');
+
+  await reset('keep');
+  await ev(`window.dispatchEvent(new Event('blur'));true`);
+  await key('x');
+  eq('first hardware key recovers when the window focus event is missing',await ev('editor.getValue()'),'keepx');
+
+  await reset('keep');await typeText('z');
+  await ev(`window.dispatchEvent(new Event('blur'));
+    (()=>{const input=editor.getInputField();input.value+='你x';input.setSelectionRange(input.value.length,input.value.length);
+      input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'你x'}));})();true`);
+  eq('input-only commit preserves pending text and its existing input baseline',await ev('editor.getValue()'),'keepz你x');
+  await key('y');
+  eq('hardware input continues after input-only focus recovery',await ev('editor.getValue()'),'keepz你xy');
+  await sleep(150);
+  eq('recovery does not duplicate committed characters on later polls',await ev('editor.getValue()'),'keepz你xy');
+
+  await reset('value');await ev(`editor.setSelection({line:0,ch:1},{line:0,ch:4});window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));true`);
+  eq('window focus recovery preserves the document selection',await ev('editor.getSelection()'),'alu');
+  await key('x');
+  eq('hardware typing replaces the original selection after recovery',await ev('editor.getValue()'),'vxe');
+
+  await reset('value');
+  await ev(`editor.setSelection({line:0,ch:1},{line:0,ch:4});window.dispatchEvent(new Event('blur'));
+    (()=>{const input=editor.getInputField();input.value='你';input.setSelectionRange(1,1);
+      input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'你'}));})();true`);
+  eq('input-only focus recovery replaces the selected range without losing the commit',await ev('editor.getValue()'),'v你e');
+
+  await reset('keep');await ev(`editor.setOption('readOnly',true);window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));true`);
+  await key('x');
+  eq('window focus recovery respects read-only documents',await ev('editor.getValue()'),'keep');
+  await ev(`editor.setOption('readOnly',false);true`);await key('y');
+  eq('hardware input resumes when the recovered document becomes writable',await ev('editor.getValue()'),'keepy');
+
+  await reset('keep');await key('x');
+  await ev(`window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));true`);
+  await key('z',{ctrl:true});
+  eq('focus recovery preserves undo history',await ev('editor.getValue()'),'keep');
+
+  await reset();await send('Input.imeSetComposition',{text:'ni',selectionStart:2,selectionEnd:2});await sleep(60);
+  await ev(`window.dispatchEvent(new Event('blur'));true`);
+  eq('window blur ends composition even if the textarea remains active',await ev('!!editor.display.input.composing'),false);
+  eq('window blur preserves the current composition text',await ev('editor.getValue()'),'ni');
+  await ev(`window.dispatchEvent(new Event('focus'));true`);await key('x');
+  eq('hardware typing continues after an interrupted window composition',await ev('editor.getValue()'),'nix');
+  await ev(`editor.getInputField().dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));true`);
+
+  await reset('keep');await ev('openSettings();true');await sleep(60);
+  const modalFocus = await ev('document.activeElement.id');
+  await ev(`window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));true`);
+  eq('window focus recovery keeps focus in an open dialog',await ev('document.activeElement.id'),modalFocus);
+  eq('window focus recovery does not focus the editor behind a dialog',await ev('editor.hasFocus()'),false);
+  await ev('hideModal("settingsModal");true');await sleep(60);
+
+  for (let i=0;i<10;i++) {
+    await ev(`window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));true`);
+    await key('a');
+  }
+  eq('repeated window switches accept every hardware character once',await ev('editor.getValue()'),'keep'+'a'.repeat(10));
+
+  await reset('pr');await ev('setSetting("autoComplete","1");triggerCompletion();true');await sleep(250);
+  await ev(`window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));true`);
+  await key('Tab');await key('x');
+  eq('Tab completion and hardware typing survive window focus recovery',await ev('editor.getValue()'),'printx');
+  await ev('setSetting("autoComplete","0");true');
 
   await reset();
   await send('Input.imeSetComposition',{text:'ni',selectionStart:2,selectionEnd:2});
@@ -60,7 +135,7 @@ try {
   await reset();
   await ev(`(()=>{const input=editor.getInputField();input.value='pending';input.setSelectionRange(0,7);
     input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',isComposing:true,data:'pending'}));})();true`);
-  eq('uncommitted selected composition is not force-read',await ev('editor.getValue()'),'');
+  eq('input-only composition updates its tracked document range',await ev('editor.getValue()'),'pending');
   eq('uncommitted native selection is preserved',await ev('[editor.getInputField().selectionStart,editor.getInputField().selectionEnd]'),[0,7]);
   await reset();
   await ev(`(()=>{const input=editor.getInputField();input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));
@@ -93,7 +168,8 @@ try {
   await ev(`(()=>{const input=editor.getInputField();input.value='i\t';input.setSelectionRange(2,2);
     input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'i\t'}));
     openSettings();})();true`);await sleep(50);
-  ok('last letter is not discarded when focus changes during text Tab',await ev('editor.getValue().startsWith("pri")'));
+  const textTabAfterBlur = await ev('editor.getValue()');
+  ok('last letter is not discarded when focus changes during text Tab (got '+JSON.stringify(textTabAfterBlur)+')',textTabAfterBlur.startsWith('pri'));
   await ev('hideModal("settingsModal");setSetting("autoComplete","0");true');await sleep(60);
 
   for (let i=0;i<8;i++) {
@@ -107,6 +183,8 @@ try {
   await ev('openProjectSearch();true');await sleep(60);
   await ev('openCommandPalette();true');await sleep(60);await key('Escape');
   eq('palette also restores a search field, without stealing focus',await ev('document.activeElement.id'),'searchInput');
+  await ev(`window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('focus'));true`);
+  eq('window focus recovery keeps the active project search field',await ev('document.activeElement.id'),'searchInput');
   ok('no browser exceptions',browser.errors.length===0);
 } catch (error) {ok('script error: '+error.message,false);}
-const failures=report('Editor input continuity');await browser.close();process.exit(failures?1:0);
+const failures=report('Editor input continuity'+(process.argv.includes('--android')?' (Android UA)':''));await browser.close();process.exit(failures?1:0);

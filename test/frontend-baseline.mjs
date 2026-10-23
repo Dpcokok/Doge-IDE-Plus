@@ -149,8 +149,9 @@ function loadPureFns(names, preamble = '') {
   ok('ligature: 符号合并默认关闭', /id="symbolLigaturesInput"/.test(html) && /getSetting\('symbolLigatures', '0'\)/.test(html));
   ok('ligature: 只通过编辑器显示类启用', /doge-symbol-ligatures/.test(html) && /font-variant-ligatures:contextual/.test(html));
   ok('brackets: CodeMirror 配置走偏好入口', /autoCloseBrackets:\s*editorBracketOptions\(\)/.test(html));
-  const makeBrackets=new Function('value',`const getSetting=()=>value;${extractFn('editorBracketOptions')};return editorBracketOptions();`);
-  eq('brackets: 默认开启并支持三类括号',makeBrackets('1').pairs,"()[]{}''\"\"");
+  const pairsConst=html.match(/const EDITOR_PAIR_CHARACTERS = [^\n]+/)[0];
+  const makeBrackets=new Function('value',`const getSetting=()=>value,currentFilePath='main.py',languageForPath=()=>({id:'python'});${pairsConst}${extractFn('editorBracketOptions')};return editorBracketOptions();`);
+  ok('brackets: 默认开启并支持括号和引号',makeBrackets('1').pairs.startsWith("()[]{}''\"\"")&&makeBrackets('1').pairs.includes('‘’“”'));
   eq('brackets: 关闭返回 false',makeBrackets('0'),false);
 }
 
@@ -373,7 +374,7 @@ ok('key: 单键命令排除输入控件', /INPUT\|TEXTAREA\|SELECT/.test(html));
     const isRunning = false, BP_GUTTER = 'bp', editorHint = () => {};
     const getProjectFile = p => project.files.find(file => file.path === p);
     const noop = () => {}, clearTimeout = noop, setTimeout = noop, applyEditorPreferences = noop, editorBracketOptions=()=>true;
-    const finishEditorComposition = noop, bindEditorInputContinuity = noop;
+    const finishEditorComposition = noop, bindEditorInputContinuity = noop, bindEditorTypingMotion = noop;
     const buildTabs = noop, loadBreakpoints = noop, loadSavedHashes = noop, loadOpenFiles = noop;
     const renderEditorTabs = noop, renderBreakpoints = noop, bindBracketInput = noop, bindAutoComplete = noop, bindRichCopy = noop, updateEditorAvailability = noop;
     const scheduleLint = noop, persistOpenFiles = noop, updateLangInfo = noop, renderProjectFiles = noop, saveCurrentFile = noop, requestClangdDiagnostics = noop;
@@ -476,7 +477,7 @@ ok('bp: 断点按文件路径存储', /breakpoints\[currentFilePath\]/.test(html
     const window = {}, DogeNative = { saveProject: json => sent.push(JSON.parse(json)) };
     window.DogeNative = DogeNative;
     const getProjectFile = path => project.files.find(file => file.path === path);
-    const saveCurrentFile = () => {}, persistSavedHashes = () => {}, persistOpenFiles = () => {};
+    const saveCurrentFile = () => {}, persistProject = () => {}, persistSavedHashes = () => {}, persistOpenFiles = () => {};
     const showToast = () => {}, renderEditorTabs = () => {}, renderProjectFiles = () => {}, openProject = () => {};
     ${source}
     ${callback}
@@ -484,6 +485,8 @@ ok('bp: 断点按文件路径存储', /breakpoints\[currentFilePath\]/.test(html
     return {
       sent, save: saveProjectToDisk,
       edit: code => { project.files[0].code = code; },
+      rename: path => { const f = project.files[0]; if (!f.originalPath) f.originalPath = f.path; f.path = path; },
+      file: () => project.files[0],
       complete: (ok, message = '') => window.projectSaveResult(ok, message),
       dirty: () => isFileDirty('main.c'),
       reset: code => { project = { files: [{ path: 'main.c', code }] }; resetEditorSession(true); }
@@ -508,6 +511,17 @@ ok('bp: 断点按文件路径存储', /breakpoints\[currentFilePath\]/.test(html
   h = createSaveHarness();
   h.edit('A'); h.save(); h.reset('another-project'); h.complete(true);
   ok('save: 旧项目的保存回调不污染新项目基线', !h.dirty());
+
+  h = createSaveHarness();
+  h.rename('first.c'); h.save(); h.rename('second.c'); h.save();
+  eq('rename: 连续改名保留目录中的最初路径', h.sent[0].files[0].originalPath, 'main.c');
+  h.complete(true);
+  eq('rename: 排队保存从上次落盘路径继续改名', h.sent[1].files[0].originalPath, 'first.c');
+  eq('rename: 当前文件也更新目录来源', h.file().originalPath, 'first.c');
+  h.complete(false, '磁盘写入失败');
+  eq('rename: 保存失败保留来源供重试', h.file().originalPath, 'first.c');
+  h.save(); h.complete(true);
+  ok('rename: 保存成功才清除改名来源', !h.file().originalPath);
 }
 
 // ── 5e. 两级面板 / 问题模型 / 每流滚动(批次 4) ─────────────────────
@@ -825,7 +839,7 @@ ok('ac: 移除工具栏补全按钮', !/id="completeBtn"/.test(html) && !/\.edit
 ok('ac: 手动补全不受开关限制', /function triggerCompletion\(\)[\s\S]{0,200}openCompletion\(editor, true\)/.test(html));
 ok('ac: 列表打开期间随输入刷新(异步 hint)', /editorHint\.async = true;/.test(html) && /hintOptions: \{ hint: editorHint/.test(html));
 ok('ac: 点候选不让编辑器失焦(平板不收键盘)', /closest\('\.CodeMirror-hints'\)\) e\.preventDefault\(\)/.test(html));
-ok('ac: 编辑菜单有自动补全开关', /'edit\.autoComplete': \{ label: '输入时自动补全', checked:/.test(html) && /'edit\.complete','edit\.autoComplete'\]/.test(html));
+ok('ac: 编辑菜单有自动补全开关', /'edit\.autoComplete': \{ label: '输入时自动补全', checked:/.test(html) && /'edit\.complete','edit\.autoComplete'/.test(html));
 ok('ac: clangd 结果按词缓存', /const clangdCompletionCache = /.test(html) && /s\.prefix\.startsWith\(c\.prefix\)/.test(html));
 ok('ac: clangd 请求带超时', /fetchJsonWithTimeout\('\/api\/v1\/intel\/completion'/.test(html));
 ok('ac: Esc 只在补全列表可见时算被用掉', /before = \{ hint: !!\(cs && cs\.widget\)/.test(html));
@@ -921,7 +935,7 @@ ok('tab: 没有列表时 Tab 照常缩进', /function acceptCompletion\(cm\) \{\
 // ── 5g. 响应式 / 触控 / 收尾(批次 6) ────────────────────────────────
 ok('b6: 默认主题为现代(早期脚本)', /\? __t : 'modern';/.test(html) && /dataset\.theme = 'modern'; \}/.test(html));
 ok('b6: 默认主题为现代(currentTheme/applyTheme)', /getSetting\('theme', 'modern'\)/.test(html) && /theme : 'modern';/.test(html) && !/getSetting\('theme', 'classic'\)/.test(html));
-ok('b6: 经典主题仍可选', /<option value="classic">/.test(html) && /THEMES = \['classic', 'modern'\]/.test(html));
+ok('b6: 经典主题仍可选', /<option value="classic">/.test(html) && /THEMES = \['classic', 'modern', 'black'\]/.test(html));
 {
   const gradle = readFileSync(join(root, 'android/app/build.gradle'), 'utf8');
   ok('b6: versionCode ≥ 4', Number((gradle.match(/versionCode (\d+)/) || [])[1]) >= 4);

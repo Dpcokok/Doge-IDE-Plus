@@ -30,8 +30,16 @@ export async function launch({ width = 1557, height = 973, touch = false } = {})
   const browser = spawn(exe, ['--headless=new', '--disable-gpu', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--user-data-dir=' + profile, '--window-size=' + width + ',' + height, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   const wsUrl = await new Promise((resolve, reject) => {
     let buf = '';
-    const t = setTimeout(() => reject(new Error('浏览器启动超时')), 20000);
-    browser.stderr.on('data', d => { buf += d; const m = buf.match(/DevTools listening on (ws:\/\/\S+)/); if (m) { clearTimeout(t); resolve(m[1]); } });
+    const finish = url => { clearTimeout(t); clearInterval(poll); resolve(url); };
+    const t = setTimeout(() => { clearInterval(poll); browser.kill(); reject(new Error('浏览器启动超时')); }, 20000);
+    // 部分 Edge 版本不再向 stderr 输出调试地址，但仍会写入独立测试配置目录。
+    const poll = setInterval(() => {
+      try {
+        const [port, path] = readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').trim().split(/\r?\n/);
+        if (/^\d+$/.test(port) && path?.startsWith('/devtools/browser/')) finish('ws://127.0.0.1:' + port + path);
+      } catch {}
+    }, 100);
+    browser.stderr.on('data', d => { buf += d; const m = buf.match(/DevTools listening on (ws:\/\/\S+)/); if (m) finish(m[1]); });
   });
   const ws = new WebSocket(wsUrl);
   await new Promise(r => ws.addEventListener('open', r));
@@ -89,12 +97,10 @@ export async function launch({ width = 1557, height = 973, touch = false } = {})
   async function typeText(t) { await S('Input.insertText', { text: t }); await sleep(60); }
   // 真实触控点击（CDP 触摸事件，会触发 pointer / click）
   async function tap(x, y) {
-    // Send the complete gesture in order before waiting for acknowledgments;
-    // headless Chromium may delay touch-start acknowledgment until touch-end.
-    await Promise.all([
-      S('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] }),
-      S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
-    ]);
+    // Chromium synthesizes a complete native touch gesture. Raw touchStart/end
+    // acknowledgments can stall in headless mode when a pointer handler cancels the click.
+    const result = await S('Input.synthesizeTapGesture', { x, y, gestureSourceType: 'touch' });
+    if (result.error) throw new Error(result.error.message);
     await sleep(120);
   }
   async function close() {

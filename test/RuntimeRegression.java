@@ -494,6 +494,60 @@ public final class RuntimeRegression {
         }
         check("project MIME matching is case-insensitive", ProjectFiles.mimeTypeForPath("src/Main.PY").equals("text/x-python"));
 
+        for (String renamed : new String[] { "renamed.py", "Main.py" }) {
+            SafProviderFixture renameProvider = new SafProviderFixture(root.toPath().resolve("save-user-rename-" + renamed));
+            renameProvider.changeIdOnRename = true;
+            ProjectSaveHarness renameActivity = new ProjectSaveHarness(renameProvider);
+            renameActivity.save(saveRequest("main.py", "original"), "root");
+            JSONObject renameRequest = saveRequest(renamed, "edited before rename");
+            renameRequest.optJSONArray("files").optJSONObject(0).put("originalPath", "main.py");
+            boolean renameSaved = true;
+            try { renameActivity.save(renameRequest, "root"); } catch (Exception error) {
+                renameSaved = false;
+                System.out.println("REPRO user rename " + renamed + ": " + error);
+            }
+            check("user rename saves " + renamed, renameSaved && renameProvider.idForPath(renamed) != null
+                    && "edited before rename".equals(renameProvider.text(renamed)) && renameProvider.fileCount() == 2);
+            check("user rename survives reopen " + renamed, renamed.equals(renameActivity.read("root").optJSONArray("files").optJSONObject(0).optString("path")));
+        }
+
+        SafProviderFixture rollbackProvider = new SafProviderFixture(root.toPath().resolve("save-user-rename-rollback"));
+        ProjectSaveHarness rollbackActivity = new ProjectSaveHarness(rollbackProvider);
+        rollbackActivity.save(saveRequest("main.py", "original"), "root");
+        rollbackProvider.changeIdOnRename = true;
+        rollbackProvider.failWrite = ".doge-project.json";
+        JSONObject rollbackRequest = saveRequest("Main.py", "edited");
+        rollbackRequest.optJSONArray("files").optJSONObject(0).put("originalPath", "main.py");
+        boolean rolledBack = false;
+        try { rollbackActivity.save(rollbackRequest, "root"); } catch (java.io.IOException expected) { rolledBack = true; }
+        check("failed rename save restores original name and contents with changed document IDs", rolledBack
+                && rollbackProvider.idForPath("main.py") != null && rollbackProvider.idForPath("Main.py") == null
+                && "original".equals(rollbackProvider.text("main.py")));
+        rollbackProvider.failWrite = null;
+        rollbackActivity.save(rollbackRequest, "root");
+        check("rename can be retried after rollback", "edited".equals(rollbackProvider.text("Main.py")));
+
+        SafProviderFixture reusedProvider = new SafProviderFixture(root.toPath().resolve("save-rename-reuse-name"));
+        ProjectSaveHarness reusedActivity = new ProjectSaveHarness(reusedProvider);
+        reusedActivity.save(saveRequest("main.py", "original"), "root");
+        JSONObject reusedRequest = saveRequest("renamed.py", "renamed");
+        reusedRequest.optJSONArray("files").optJSONObject(0).put("originalPath", "main.py");
+        reusedRequest.optJSONArray("files").put(new JSONObject().put("path", "main.py").put("code", "new file"));
+        reusedActivity.save(reusedRequest, "root");
+        check("a new file can reuse the original name after rename", "new file".equals(reusedProvider.text("main.py"))
+                && "renamed".equals(reusedProvider.text("renamed.py")) && reusedProvider.fileCount() == 3);
+
+        SafProviderFixture importedProvider = new SafProviderFixture(root.toPath().resolve("save-imported-rename"));
+        Uri imported = importedProvider.create(new Uri("root", false), "text/x-python", "main.py");
+        try (java.io.OutputStream output = importedProvider.openOutputStream(imported, "wt")) { output.write("original".getBytes()); }
+        importedProvider.denyRename = true;
+        JSONObject importedRequest = saveRequest("renamed.py", "edited");
+        importedRequest.optJSONArray("files").optJSONObject(0).put("originalPath", "main.py");
+        ProjectSaveHarness importedActivity = new ProjectSaveHarness(importedProvider);
+        importedActivity.save(importedRequest, "root");
+        check("providers without rename support can save an imported rename without leaving old copies",
+                importedProvider.idForPath("main.py") == null && "edited".equals(importedProvider.text("renamed.py")) && importedProvider.fileCount() == 2);
+
         SafProviderFixture provider = new SafProviderFixture(root.toPath().resolve("save-rename"));
         provider.wrongName = true;
         new ProjectSaveHarness(provider).save(saveRequest("main.py", "first"), "root");
