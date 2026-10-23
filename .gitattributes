@@ -1,0 +1,19 @@
+# 仓库内统一按文本处理，检出行为交给各平台
+* text=auto
+
+# Windows 脚本保持 CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# 二进制资源，禁止换行转换与文本 diff
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.webp   binary
+*.gif    binary
+*.ico    binary
+*.apk    binary
+*.so     binary
+*.woff2  binary
+*.zip    binary
